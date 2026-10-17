@@ -1,0 +1,13 @@
+.env
+.venv/
+node_modules/
+projects.json
+data/
+__pycache__/
+.pytest_cache/
+*.pyc
+.DS_Store
+tmp_*.py
+web/dist/
+*.bundle
+.cursor/

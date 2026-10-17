@@ -1,0 +1,285 @@
+{
+  "started_at": "2026-10-17T12:35:38.881924+00:00",
+  "base_url": "http://127.0.0.1:8000",
+  "go_live_ready": false,
+  "notes": [
+    "Your recent LifeOS coding run is recorded in SQLite. If the UI felt 'stuck', compare chat wording vs task status/events \u2014 a finished review task can still look vague if follow-ups don't cite evidence.",
+    "Skipped live Cursor agent smoke (set ORCH_BROWSER_LIVE_AGENT=1 to run a disposable fixture task).",
+    "Not go-live ready: 0 blocker(s), 2 major gap(s)."
+  ],
+  "gaps": [
+    "[major] Status follow-up gets an evidence-shaped reply (not empty/stuck): Task 2b68ff094d33 is ready for review. 6 files were modified and all tests passed. The agent finished its work 5 minutes ago, with the last activity 7 minutes ago. No blockers are reported. Please let me know if you'd like me to open a pull request or provide a detailed review.\nSwitched to lifeos. This chat thread is only for lifeos \u2014 earlier conversations on other projects stay in their own threa",
+    "[major] No high-frequency known failure modes in recent history: auth failures\u00d72, workspace collision\u00d71, empty agent output\u00d72"
+  ],
+  "checks": [
+    {
+      "id": "health",
+      "title": "Orchestrator /health responds",
+      "ok": true,
+      "severity": "blocker",
+      "detail": "status=200 body={\"status\":\"ok\"}",
+      "evidence": {
+        "status": 200
+      }
+    },
+    {
+      "id": "login_shell",
+      "title": "Web chat login reaches composer",
+      "ok": true,
+      "severity": "blocker",
+      "detail": "Composer #txt/#send visible after login",
+      "evidence": {}
+    },
+    {
+      "id": "status_endpoint",
+      "title": "/chat/status authenticated payload",
+      "ok": true,
+      "severity": "blocker",
+      "detail": "HTTP 200; dry_run=False; agent_ok=True; projects=11",
+      "evidence": {
+        "dry_run": false,
+        "agent_ok": true,
+        "agent_detail": "C:/Users/naeem/AppData/Local/cursor-agent/agent.cmd",
+        "agent_auth": {
+          "ok": true,
+          "email": "info@kingdom-vision.com",
+          "mode": "api-key"
+        },
+        "pending_jobs": 0,
+        "active_task": {
+          "id": "2b68ff094d33",
+          "project": "lifeos",
+          "status": "review",
+          "execution_stage": "ready_for_review"
+        }
+      }
+    },
+    {
+      "id": "live_mode",
+      "title": "DRY_RUN is false (real Cursor runs enabled)",
+      "ok": true,
+      "severity": "blocker",
+      "detail": "DRY_RUN=false",
+      "evidence": {}
+    },
+    {
+      "id": "agent_cli",
+      "title": "Cursor agent CLI is available",
+      "ok": true,
+      "severity": "blocker",
+      "detail": "C:/Users/naeem/AppData/Local/cursor-agent/agent.cmd",
+      "evidence": {}
+    },
+    {
+      "id": "agent_auth",
+      "title": "Cursor agent authentication is healthy",
+      "ok": true,
+      "severity": "blocker",
+      "detail": "mode=api-key email=info@kingdom-vision.com ok=True",
+      "evidence": {
+        "ok": true,
+        "email": "info@kingdom-vision.com",
+        "mode": "api-key"
+      }
+    },
+    {
+      "id": "lifeos_registered",
+      "title": "LifeOS project is registered",
+      "ok": true,
+      "severity": "blocker",
+      "detail": "projects=['beydountech', 'ecc', 'japanski_travel', 'kv-hrms', 'kv-travels', 'lifeos', 'shahbasalon', 'staging-beydountech', 'truck-lts-admin-dashboard', 'valoracares', 'velora']",
+      "evidence": {}
+    },
+    {
+      "id": "status_pill",
+      "title": "Header status pill reflects live agent health",
+      "ok": true,
+      "severity": "major",
+      "detail": "pillText='LIVE \u00b7 agent ok \u00b7 smart chat \u00b7 11 projects \u00b7 browser_smoke_b98e46'",
+      "evidence": {}
+    },
+    {
+      "id": "select_lifeos",
+      "title": "Selecting LifeOS sets active_project session",
+      "ok": true,
+      "severity": "blocker",
+      "detail": "active_project='lifeos'",
+      "evidence": {}
+    },
+    {
+      "id": "status_followup",
+      "title": "Status follow-up gets an evidence-shaped reply (not empty/stuck)",
+      "ok": false,
+      "severity": "major",
+      "detail": "Task 2b68ff094d33 is ready for review. 6 files were modified and all tests passed. The agent finished its work 5 minutes ago, with the last activity 7 minutes ago. No blockers are reported. Please let me know if you'd like me to open a pull request or provide a detailed review.\nSwitched to lifeos. This chat thread is only for lifeos \u2014 earlier conversations on other projects stay in their own threa",
+      "evidence": {
+        "stuck_phrases": [],
+        "new_out_count": 0
+      }
+    },
+    {
+      "id": "task_progress_api",
+      "title": "/chat/task-progress returns structured snapshot",
+      "ok": true,
+      "severity": "major",
+      "detail": "task=None; events=0; panel_openish=True",
+      "evidence": {
+        "task": null,
+        "event_count": 0
+      }
+    },
+    {
+      "id": "history_sample",
+      "title": "SQLite history shows at least one successful streamed review",
+      "ok": true,
+      "severity": "major",
+      "detail": "status_counts={'failed': 8, 'published': 2, 'rejected': 1, 'review': 2}; stream_ok_in_sample=3; review_with_files=1; failure_buckets={'auth': 2, 'sandbox': 1, 'empty_output': 2, 'workspace_collision': 1, 'orchestrator_restart': 1, 'none_type': 1, 'other_failed': 1}",
+      "evidence": {
+        "latest_task": {
+          "id": "2b68ff094d33",
+          "project": "lifeos",
+          "status": "review",
+          "execution_stage": "ready_for_review",
+          "exit_code": 0,
+          "blocker": null,
+          "summary": "Agent: I'll read `.orchestrator-task.md` first and implement the USER TASK from it.I'll explore the workspace to find the login screen and how auth sessions are handled.The login UI already mentions 30 days \u2014 I'll check whether the backend ",
+          "started_at": 1792239699,
+          "ended_at": 1792240015,
+          "last_activity_at": 1792240015,
+          "modified_files": "[\"app/Http/Controllers/Auth/AuthController.php\", \"app/Services/Iam/SocialAuthService.php\", \"app/Services/Settings/SettingsConfigSyncService.php\", \"config/auth.php\", \"resources/views/auth/login.blade.php\", \"tests/Feature/Auth/AuthEnterpriseT"
+        },
+        "latest_events": [
+          {
+            "event_type": "ready_for_review",
+            "stage": "ready_for_review",
+            "message": "Coding complete \u2014 ready for review"
+          },
+          {
+            "event_type": "files_changed",
+            "stage": "implementing",
+            "message": "Workspace evidence: 6 modified file(s)"
+          },
+          {
+            "event_type": "agent_exited",
+            "stage": "implementing",
+            "message": "Cursor agent process exited with code 0"
+          },
+          {
+            "event_type": "agent_stream",
+            "stage": "implementing",
+            "message": "I'll read `.orchestrator-task.md` first and implement the USER TASK from it.I'll explore the workspace to find the login screen and how auth"
+          },
+          {
+            "event_type": "agent_stream",
+            "stage": "implementing",
+            "message": "Agent: **Remember me for 30 days** is wired end-to-end: the login checkbox, a 30-day remember cookie, and tests that lock that behavior in. "
+          },
+          {
+            "event_type": "agent_stream",
+            "stage": "implementing",
+            "message": "Agent stream result"
+          },
+          {
+            "event_type": "agent_stream",
+            "stage": "implementing",
+            "message": "Read \u2026chestrator-data-workspaces-2b68ff094d33/terminals/522767.txt"
+          },
+          {
+            "event_type": "agent_stream",
+            "stage": "implementing",
+            "message": "Grep vendor/laravel/framework/src/Illuminate/Auth/SessionGuard.php"
+          },
+          {
+            "event_type": "agent_stream",
+            "stage": "implementing",
+            "message": "Grep app/Services/Iam/SocialAuthService.php"
+          },
+          {
+            "event_type": "agent_stream",
+            "stage": "implementing",
+            "message": "Edit tests/Feature/Auth/AuthEnterpriseTest.php"
+          },
+          {
+            "event_type": "agent_stream",
+            "stage": "implementing",
+            "message": "Edit tests/Feature/Auth/AuthEnterpriseTest.php"
+          },
+          {
+            "event_type": "agent_stream",
+            "stage": "implementing",
+            "message": "Edit app/Services/Iam/SocialAuthService.php"
+          },
+          {
+            "event_type": "agent_stream",
+            "stage": "implementing",
+            "message": "Edit app/Services/Settings/SettingsConfigSyncService.php"
+          },
+          {
+            "event_type": "agent_stream",
+            "stage": "implementing",
+            "message": "Edit resources/views/auth/login.blade.php"
+          },
+          {
+            "event_type": "agent_stream",
+            "stage": "implementing",
+            "message": "Edit app/Http/Controllers/Auth/AuthController.php"
+          }
+        ]
+      }
+    },
+    {
+      "id": "recurring_failures",
+      "title": "No high-frequency known failure modes in recent history",
+      "ok": false,
+      "severity": "major",
+      "detail": "auth failures\u00d72, workspace collision\u00d71, empty agent output\u00d72",
+      "evidence": {
+        "auth": 2,
+        "sandbox": 1,
+        "empty_output": 2,
+        "workspace_collision": 1,
+        "orchestrator_restart": 1,
+        "none_type": 1,
+        "other_failed": 1
+      }
+    },
+    {
+      "id": "latest_coding_outcome",
+      "title": "Latest coding task reached a real reviewable outcome",
+      "ok": "[\"app/Http/Controllers/Auth/AuthController.php\", \"app/Services/Iam/SocialAuthService.php\", \"app/Services/Settings/SettingsConfigSyncService.php\", \"config/auth.php\", \"resources/views/auth/login.blade.php\", \"tests/Feature/Auth/AuthEnterpriseT",
+      "severity": "major",
+      "detail": "id=2b68ff094d33 status=review stage=ready_for_review exit=0 files=[\"app/Http/Controllers/Auth/AuthController.php\", \"app/Services/Iam/SocialAuthService.php\", \"app/Services/Settings/SettingsConfigSyncService.php\", \"config/auth.php\", \"resources/view",
+      "evidence": {
+        "task": {
+          "id": "2b68ff094d33",
+          "project": "lifeos",
+          "status": "review",
+          "execution_stage": "ready_for_review",
+          "exit_code": 0,
+          "blocker": null,
+          "summary": "Agent: I'll read `.orchestrator-task.md` first and implement the USER TASK from it.I'll explore the workspace to find the login screen and how auth sessions are handled.The login UI already mentions 30 days \u2014 I'll check whether the backend ",
+          "started_at": 1792239699,
+          "ended_at": 1792240015,
+          "last_activity_at": 1792240015,
+          "modified_files": "[\"app/Http/Controllers/Auth/AuthController.php\", \"app/Services/Iam/SocialAuthService.php\", \"app/Services/Settings/SettingsConfigSyncService.php\", \"config/auth.php\", \"resources/views/auth/login.blade.php\", \"tests/Feature/Auth/AuthEnterpriseT"
+        }
+      }
+    },
+    {
+      "id": "browser_console",
+      "title": "No severe page/console errors during investigation",
+      "ok": false,
+      "severity": "minor",
+      "detail": "page_errors=['Failed to fetch']; console=['error: Creating a worker from \\'http://127.0.0.1:8000/chat/sw.js\\' violates the following Content Security Policy directive: \"script-src \\'nonce-XTwRfihBuhaTE-rvwxTv3A\\'\". Note that \\'worker-src\\' was not explicitly set, so \\'script-src\\' is used as a fallback. The action has been blocked.', 'error: Creating a worker from \\'http://127.0.0.1:8000/chat/sw.js\\' violates the following Content Security Policy directive: \"script-src \\'nonce-WBEc_IDQCnwcOxC2VjPpQg\\'\". Note that \\'worker-src\\' was not explicitly set, so \\'script-src\\' is used as a fallback. The action has been blocked.', 'error: Failed to load resource: net::ERR_CONNECTION_RESET', 'error: Failed to load resource: net::ERR_CONNECTION_RESET', 'error: Failed to load resource: net::ERR_CONNECTION_REFUSED', 'error: Failed to load resource: net::ERR_CONNECTION_REFUSED', 'error: Failed to load resource: net::ERR_CONNECTION_REFUSED', 'error: Failed to load resource: net::ERR_CONNECTION_REFUSED']; net=[]",
+      "evidence": {}
+    },
+    {
+      "id": "pwa_service_worker_csp",
+      "title": "Service worker registers without CSP block (PWA/notifications)",
+      "ok": false,
+      "severity": "minor",
+      "detail": "CSP blocks /chat/sw.js worker \u2014 install/notifications may be degraded",
+      "evidence": {}
+    }
+  ]
+}

@@ -1,0 +1,18 @@
+{
+  "demo": {
+    "path": "C:/Users/YOU/projects/demo",
+    "type": "local",
+    "test_command": "",
+    "allow_push": false,
+    "allow_deploy": false,
+    "deploy_command": ""
+  },
+  "lifeos": {
+    "path": "C:/Users/YOU/projects/lifeos",
+    "type": "git",
+    "test_command": "python -m pytest -q",
+    "allow_push": true,
+    "allow_deploy": false,
+    "deploy_command": ""
+  }
+}
