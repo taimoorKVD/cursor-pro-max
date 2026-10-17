@@ -474,14 +474,18 @@ def parse_intent(text: str, registry: dict[str, Any], sender: str = "") -> Inten
     if re.search(r"\b(approve|push|deploy|ship|merge|apply)\b", lowered):
         if re.search(r"\bdeploy\b", lowered):
             action = "DEPLOY"
-        elif re.search(r"\b(apply locally|apply local|merge (it |that )?locally|merge into (my )?project)\b", lowered):
-            action = "APPLY"
         elif re.search(r"\b(push|ship)\b", lowered):
+            # "apply and push" / "approve and push" → PUSH (still applies locally when enabled)
             action = "PUSH"
-        elif re.search(r"\bapprove\b", lowered) and re.search(r"\bapply\b", lowered):
+        elif re.search(
+            r"\bapply\b|"
+            r"\b(merge (it |that )?locally|merge into (my )?project)\b",
+            lowered,
+        ):
+            # Bare "apply" / "apply locally" / "approve and apply" → local merge only
             action = "APPLY"
         else:
-            # "approve" / "approve and push" → PUSH path (push if allowed + apply_local)
+            # "approve" / "merge" alone → PUSH path (push if allowed + apply_local)
             action = "PUSH"
         return Intent(kind="approve", task_id=task_id, action=action, raw=raw)
 
@@ -641,3 +645,41 @@ def parse_intent(text: str, registry: dict[str, Any], sender: str = "") -> Inten
         return Intent(kind="retry", raw=raw)
 
     return Intent(kind="unknown", raw=raw)
+
+
+# Publish / control verbs must not become Cursor coding tasks when Groq mislabels them.
+_CONTROL_KINDS = frozenset({"approve", "reject", "cancel_task", "local_git"})
+_LLM_SOFT_KINDS = frozenset(
+    {
+        "task",
+        "task_need_project",
+        "chat",
+        "unknown",
+        "ask_instruction",
+        "continue_work",
+    }
+)
+
+
+def resolve_intent(
+    text: str,
+    registry: dict[str, Any],
+    *,
+    sender: str = "",
+    llm_intent: Intent | None = None,
+) -> Intent:
+    """Prefer deterministic regex for approve/apply/reject over LLM task mislabels."""
+    regex = parse_intent(text, registry, sender=sender)
+    if llm_intent is None:
+        return regex
+    if regex.kind in _CONTROL_KINDS and llm_intent.kind in _LLM_SOFT_KINDS:
+        return regex
+    # Bare "apply" must stay APPLY even if the model returns approve/PUSH.
+    if (
+        regex.kind == "approve"
+        and llm_intent.kind == "approve"
+        and regex.action == "APPLY"
+        and llm_intent.action != "APPLY"
+    ):
+        return regex
+    return llm_intent

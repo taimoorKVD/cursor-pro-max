@@ -32,9 +32,26 @@ def test_parse_approve_reject_last():
     assert parse_intent("approve and push", REGISTRY).action == "PUSH"
     assert parse_intent("apply locally", REGISTRY).kind == "approve"
     assert parse_intent("apply locally", REGISTRY).action == "APPLY"
+    assert parse_intent("apply", REGISTRY).kind == "approve"
+    assert parse_intent("apply", REGISTRY).action == "APPLY"
+    assert parse_intent("apply it", REGISTRY).action == "APPLY"
+    assert parse_intent("approve and apply", REGISTRY).action == "APPLY"
     assert parse_intent("reject that", REGISTRY).kind == "reject"
     assert parse_intent("cancel that task", REGISTRY).kind == "cancel_task"
     assert parse_intent("how is my last task going?", REGISTRY).kind == "status"
+
+
+def test_resolve_intent_prefers_regex_apply_over_llm_task():
+    from orchestrator.converse import Intent, resolve_intent
+
+    llm_task = Intent(kind="task", project="lifeos", instruction="apply", raw="apply")
+    resolved = resolve_intent("apply", REGISTRY, llm_intent=llm_task)
+    assert resolved.kind == "approve"
+    assert resolved.action == "APPLY"
+
+    llm_push = Intent(kind="approve", action="PUSH", raw="apply")
+    resolved2 = resolve_intent("apply", REGISTRY, llm_intent=llm_push)
+    assert resolved2.action == "APPLY"
 
 
 def test_parse_create_pull_request():

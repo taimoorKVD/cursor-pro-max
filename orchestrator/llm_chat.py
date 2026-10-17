@@ -354,7 +354,9 @@ def _system_prompt(registry: dict[str, Any], sender: str) -> str:
         '- Wanting code changed on a known project → kind \"task\"\n'
         '- Wanting code changed but no project named → kind \"task_need_project\" '
         "(unless Active session has a project — then kind task)\n"
-        '- Approve / push / apply / PR / deploy → kind \"approve\" with action\n'
+        '- Approve / push / apply / PR / deploy → kind \"approve\" with action '
+        '(bare \"apply\" / \"apply locally\" → action APPLY; '
+        '\"approve\" / \"approve and push\" → action PUSH; never kind \"task\")\n'
         '- \"commit my local changes\" / \"stash local changes\" / '
         '\"commit local and apply\" → kind \"local_git\" with action '
         "COMMIT, STASH, or COMMIT_APPLY (optional commit message in instruction)\n"

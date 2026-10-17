@@ -306,8 +306,14 @@ def handle(sender: str, body: str) -> None:
 
     registry = projects.projects()
     llm = llm_chat.understand(body, registry, sender=sender)
-    intent = llm.intent if llm else converse.parse_intent(body, registry, sender=sender)
-    soft_reply = (llm.reply if llm else None) or None
+    intent = converse.resolve_intent(
+        body,
+        registry,
+        sender=sender,
+        llm_intent=llm.intent if llm else None,
+    )
+    # Keep LLM phrasing only when we kept the LLM intent object.
+    soft_reply = (llm.reply if llm and llm.intent is intent else None) or None
 
     if intent.kind == "greet":
         send_text(
