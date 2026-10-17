@@ -28,6 +28,7 @@ _TASK_COLUMNS = frozenset(
         "blocker",
         "revision",
         "approved_sha",
+        "agent_chat_id",
     }
 )
 
@@ -129,6 +130,56 @@ def claim_publishing(task_id: str) -> bool:
         return cur.rowcount == 1
 
 
+def queue_for_resume(task_id: str, *, instruction: str | None = None) -> bool:
+    """Re-queue a review/failed task to continue in the same workspace via --resume.
+
+    Bumps ``revision``, keeps ``workspace`` / ``branch`` / ``agent_chat_id``, and
+    clears review digest so a fresh approval is required.
+    """
+    current = get_task(task_id)
+    if not current or current["status"] not in {"review", "failed"}:
+        return False
+    assert_transition(current["status"], "queued")
+    now = db.now()
+    rev = int(current.get("revision") or 1) + 1
+    fields: dict[str, Any] = {
+        "status": "queued",
+        "execution_stage": "queued",
+        "revision": rev,
+        "summary": None,
+        "content_digest": None,
+        "approved_sha": None,
+        "blocker": None,
+        "exit_code": None,
+        "ended_at": None,
+        "agent_pid": None,
+        "updated_at": now,
+        "last_activity_at": now,
+    }
+    if instruction is not None and instruction.strip():
+        fields["instruction"] = instruction.strip()
+    assignments = ", ".join(f"{k}=?" for k in fields)
+    with db.DB_LOCK, db.connect() as c:
+        cur = c.execute(
+            f"UPDATE tasks SET {assignments} WHERE id=? AND status=?",
+            (*fields.values(), task_id, current["status"]),
+        )
+        return cur.rowcount == 1
+
+
+def can_resume_agent(task: dict[str, Any] | None) -> bool:
+    """True when the task has a durable Cursor session + existing workspace."""
+    if not task:
+        return False
+    chat_id = (task.get("agent_chat_id") or "").strip()
+    ws = (task.get("workspace") or "").strip()
+    if not chat_id or not ws:
+        return False
+    from pathlib import Path
+
+    return Path(ws).is_dir()
+
+
 def touch(task_id: str) -> None:
     now = db.now()
     with db.DB_LOCK, db.connect() as c:
@@ -159,7 +210,8 @@ def list_tasks_for_sender(sender: str, *, limit: int = 15) -> list[dict[str, Any
         rows = c.execute(
             """SELECT id, project, status, instruction, summary, execution_stage,
                       created_at, updated_at, started_at, last_activity_at, ended_at,
-                      modified_files, blocker, exit_code, workspace, branch
+                      modified_files, blocker, exit_code, workspace, branch,
+                      revision, agent_chat_id, content_digest
                FROM tasks WHERE sender=? ORDER BY created_at DESC LIMIT ?""",
             (sender, limit),
         ).fetchall()

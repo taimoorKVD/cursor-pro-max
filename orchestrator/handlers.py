@@ -29,7 +29,9 @@ def _help() -> str:
         '- "Let\'s work on lifeos" then describe the bug\n'
         '- "What\'s remaining?" / "Done?" / "What changes did you make?"\n'
         '- "Show my tasks" or "Why is it stuck?"\n'
-        '- "Approve and push" or "Reject that" when something looks good\n'
+        '- "Approve and apply" / "Apply locally" (or push) when review looks good\n'
+        '- "Continue working" to resume the same Cursor session when possible\n'
+        '- "Reject that" to discard a review\n'
         '- "Set projects root C:/laragon/www" then "Scan projects" / "Add project velora"\n'
         '- "Update project lifeos set allow_push true"\n\n'
         "Status answers come from real execution events — I won't invent progress."
@@ -671,13 +673,62 @@ def handle(sender: str, body: str) -> None:
     if intent.kind == "continue_work":
         task = _resolve_task(sender, intent.task_id)
         remembered = converse.last_work(sender)
+        if task and task["status"] in {"queued", "running"}:
+            send_text(
+                sender,
+                _progress_reply(sender, "status", task),
+                level="info",
+            )
+            return
+        # Prefer real Cursor --resume in the same workspace when we have a session id.
+        # Re-fetch full row: list/active helpers may omit columns used for resume.
+        if task and task["status"] in {"review", "failed"}:
+            task = tasks.get_task(task["id"]) or task
+        if (
+            task
+            and task["status"] in {"review", "failed"}
+            and tasks.can_resume_agent(task)
+        ):
+            instruction = (
+                (remembered or {}).get("instruction")
+                or task.get("instruction")
+                or ""
+            )
+            if tasks.queue_for_resume(task["id"], instruction=str(instruction) or None):
+                queue.enqueue(task["id"], kind="execute")
+                converse.remember_work(
+                    sender,
+                    project=str(task.get("project") or ""),
+                    instruction=str(instruction or task.get("instruction") or ""),
+                    task_id=task["id"],
+                )
+                session.set_active_task(
+                    sender, task["id"], project=str(task.get("project") or "") or None
+                )
+                audit.record(
+                    "task_resume_queued",
+                    actor=sender,
+                    task_id=task["id"],
+                    detail={
+                        "project": task.get("project"),
+                        "agent_chat_id": (task.get("agent_chat_id") or "")[:64],
+                    },
+                )
+                send_text(
+                    sender,
+                    f"Continuing task {task['id']} on {task.get('project')} "
+                    "with the same Cursor agent session (resume).",
+                    level="info",
+                )
+                return
         if task and task["status"] in {"failed", "rejected"}:
             instruction = task.get("instruction") or (remembered or {}).get("instruction")
             project = task.get("project") or (remembered or {}).get("project")
             if project and instruction:
                 send_text(
                     sender,
-                    f"Retrying {project} from the last failed/rejected task state.",
+                    f"Retrying {project} from the last failed/rejected task state "
+                    "(fresh workspace — no resumable Cursor session).",
                     level="info",
                 )
                 _start_task(sender, str(project), str(instruction))
@@ -689,13 +740,6 @@ def handle(sender: str, body: str) -> None:
                 level="info",
             )
             _start_task(sender, str(remembered["project"]), str(remembered["instruction"]))
-            return
-        if task and task["status"] in {"queued", "running"}:
-            send_text(
-                sender,
-                _progress_reply(sender, "status", task),
-                level="info",
-            )
             return
         send_text(
             sender,

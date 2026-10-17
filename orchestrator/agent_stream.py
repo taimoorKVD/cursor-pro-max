@@ -22,6 +22,7 @@ class StreamEvidence:
     files_touched: list[str] = field(default_factory=list)
     text_chunks: list[str] = field(default_factory=list)
     result_text: str = ""
+    session_id: str = ""
     raw_events: int = 0
     saw_tool: bool = False
     saw_write: bool = False
@@ -180,6 +181,10 @@ def parse_line(line: str, evidence: StreamEvidence) -> dict[str, Any] | None:
     if not isinstance(data, dict):
         return None
     evidence.raw_events += 1
+
+    sid = data.get("session_id") or data.get("chat_id") or data.get("chatId")
+    if isinstance(sid, str) and sid.strip():
+        evidence.session_id = sid.strip()
 
     etype = str(
         data.get("type") or data.get("event") or data.get("kind") or data.get("role") or ""

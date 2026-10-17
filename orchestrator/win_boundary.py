@@ -232,8 +232,14 @@ def grant(path: Path, rights: str, *, recursive: bool = True) -> None:
         timeout=120,
         check=False,
     )
-    if result.returncode != 0:
-        detail = (result.stderr or result.stdout or "").strip()
+    detail = f"{result.stdout or ''}\n{result.stderr or ''}".strip()
+    lower = detail.lower()
+    # icacls often returns 0 with /C even when every target failed ("Access is denied").
+    if (
+        result.returncode != 0
+        or "access is denied" in lower
+        or "successfully processed 0 files" in lower
+    ):
         raise OSError(f"icacls grant failed for {target}: {detail[:300]}")
     _granted.add(token)
 
@@ -249,7 +255,8 @@ def grant_ancestors(path: Path) -> None:
     while True:
         parent = current.parent
         if parent == current:
-            chain.append(current)
+            # Drive roots (C:\, D:\) refuse AppContainer ACL edits without
+            # elevation. Node boots with --preserve-symlinks-main instead.
             break
         chain.append(parent)
         current = parent
@@ -257,7 +264,7 @@ def grant_ancestors(path: Path) -> None:
         try:
             grant(ancestor, "(RX)", recursive=False)
         except OSError:
-            # Some roots (network / protected) refuse ACL edits; keep going.
+            # Protected directories may refuse ACL edits; keep going.
             continue
 
 

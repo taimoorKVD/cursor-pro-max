@@ -14,5 +14,16 @@
     "allow_push": true,
     "allow_deploy": false,
     "deploy_command": ""
+  },
+  "whatsapp-cursor-orchestrator": {
+    "path": "C:/Users/YOU/projects/whatsapp-cursor-orchestrator",
+    "type": "git",
+    "test_command": "python -m pytest tests/test_webchat.py tests/test_project_chat_isolation.py -q",
+    "allow_push": false,
+    "allow_deploy": false,
+    "apply_local": true,
+    "deploy_command": "",
+    "instructions": "Self-improving orchestrator. Stay in workspace; never touch .env or data/. After apply, restart the process.",
+    "default_branch": "master"
   }
 }

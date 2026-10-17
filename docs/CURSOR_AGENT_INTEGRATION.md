@@ -31,7 +31,7 @@ Sources: [CLI overview](https://cursor.com/docs/cli/overview), [Headless](https:
 | `--trust` | Headless trust workspace | Yes |
 | `--mode plan` / `--mode ask` | Plan-first / read-only | No |
 | `--worktree` | CLI-managed git worktree under `~/.cursor/worktrees` | No (app manages its own worktrees) |
-| `--resume` / `--continue` | Multi-turn agent sessions | No |
+| `--resume` / `--continue` | Multi-turn agent sessions | Yes (`--resume=<session_id>` when task has `agent_chat_id`) |
 | `CURSOR_API_KEY` / `agent login` | Auth | Operator responsibility |
 | Image paths in prompts | Screenshot analysis | No (no media pipeline yet) |
 | Rules / `AGENTS.md` / `.cursor/rules` | Project guidance | Not injected by orchestrator (CLI may auto-load if present in workspace) |

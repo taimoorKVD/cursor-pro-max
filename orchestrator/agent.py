@@ -78,12 +78,24 @@ def _resolve_windows_entrypoint(agent_bin: str) -> list[str]:
                         best_key = key
                         best = child
         if best is not None:
-            return [str(best / "node.exe"), str(best / "index.js")]
+            # AppContainers cannot lstat drive roots (EPERM on C:\). Node's
+            # default main-module realpath walks from the root — skip it.
+            return [
+                str(best / "node.exe"),
+                "--preserve-symlinks",
+                "--preserve-symlinks-main",
+                str(best / "index.js"),
+            ]
 
         direct_node = shim_dir / "node.exe"
         direct_js = shim_dir / "index.js"
         if direct_node.is_file() and direct_js.is_file():
-            return [str(direct_node), str(direct_js)]
+            return [
+                str(direct_node),
+                "--preserve-symlinks",
+                "--preserve-symlinks-main",
+                str(direct_js),
+            ]
 
         ps1 = shim_dir / "agent.ps1"
         if ps1.is_file():
@@ -154,7 +166,12 @@ def _agent_env(workspace: Path | None = None) -> dict[str, str]:
     return agent_env(workspace)
 
 
-def build_argv(workspace: Path) -> list[str]:
+def build_argv(
+    workspace: Path,
+    *,
+    resume_chat_id: str | None = None,
+    prompt_pointer: str | None = None,
+) -> list[str]:
     """CLI argv. Short pointer prompt only — full task lives in TASK_FILE / stdin."""
     workspace = Path(workspace).resolve()
     out_fmt = getattr(config, "AGENT_OUTPUT_FORMAT", "stream-json") or "stream-json"
@@ -172,8 +189,15 @@ def build_argv(workspace: Path) -> list[str]:
     sandbox = _effective_sandbox()
     if sandbox:
         argv.extend(["--sandbox", sandbox])
+    chat_id = (resume_chat_id or "").strip()
+    if chat_id:
+        # Prefer --resume=<id> so Windows/PowerShell never drop a bare optional arg.
+        argv.append(f"--resume={chat_id}")
     # Short single-line argv prompt (Windows-safe). Full text also on stdin + file.
-    argv.append(CLI_POINTER)
+    pointer = (prompt_pointer or "").strip() or CLI_POINTER
+    if len(pointer) > 400:
+        pointer = pointer[:397] + "..."
+    argv.append(pointer)
     return argv
 
 
@@ -329,8 +353,13 @@ def run_agent(
     on_heartbeat: Any = None,
     on_stream_event: Any = None,
     evidence: Any = None,
+    resume_chat_id: str | None = None,
 ) -> tuple[str, int]:
-    """Run Cursor CLI. Returns (summary_text, exit_code)."""
+    """Run Cursor CLI. Returns (summary_text, exit_code).
+
+    When ``resume_chat_id`` is set, invokes ``agent --resume=<id>`` in the same
+    workspace so follow-ups keep Cursor conversation context.
+    """
     from orchestrator.agent_stream import StreamEvidence, make_line_handler
     from orchestrator.process import run_tracked
 
@@ -363,7 +392,14 @@ def run_agent(
         raise RuntimeError(boundary_detail)
     quotas.assert_agent_allowed()
 
-    argv = build_argv(workspace)
+    resume_id = (resume_chat_id or "").strip() or None
+    pointer = CLI_POINTER
+    if resume_id:
+        pointer = (
+            f"Read {TASK_FILE} for the follow-up USER TASK, then continue from "
+            "our previous work in this workspace. Implement the follow-up now."
+        )
+    argv = build_argv(workspace, resume_chat_id=resume_id, prompt_pointer=pointer)
     log.info(
         "Running agent entry=%s prompt_chars=%s task_file=%s auth=%s task_id=%s fmt=%s boundary=%s",
         argv[:2],

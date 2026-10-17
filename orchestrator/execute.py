@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import re
 import shlex
+from pathlib import Path
 
 from orchestrator import agent, audit, config, db, projects, queue, task_events, tasks, workspace
 from orchestrator.notify import send_text
@@ -80,21 +81,52 @@ def execute_task(task_id: str, *, job_id: int | None = None, fence: str | None =
             detail={"project": project},
         )
 
-        target, branch = workspace.setup(task_id, project_config)
-        tasks.update_task(task_id, workspace=str(target), branch=branch)
-        task_events.record(
-            task_id,
-            "workspace_ready",
-            f"Workspace ready at {target.name}" + (f" (branch {branch})" if branch else ""),
-            stage="preparing_workspace",
-            detail={"workspace": str(target), "branch": branch or None},
+        resume_chat_id = (task.get("agent_chat_id") or "").strip()
+        reuse_workspace = (
+            int(task.get("revision") or 1) > 1
+            and bool(resume_chat_id)
+            and tasks.can_resume_agent(task)
         )
-        _notify_milestone(
-            sender,
-            task_id,
-            "workspace_ready",
-            f"Workspace ready for {project} (isolated copy). Next: start Cursor agent process.",
-        )
+        if reuse_workspace:
+            target = Path(str(task["workspace"])).resolve()
+            branch = str(task.get("branch") or "")
+            task_events.record(
+                task_id,
+                "workspace_reused",
+                f"Reusing workspace for Cursor --resume ({target.name})"
+                + (f" branch {branch}" if branch else ""),
+                stage="preparing_workspace",
+                detail={
+                    "workspace": str(target),
+                    "branch": branch or None,
+                    "agent_chat_id": resume_chat_id[:64],
+                    "revision": int(task.get("revision") or 1),
+                },
+            )
+            _notify_milestone(
+                sender,
+                task_id,
+                "workspace_reused",
+                f"Continuing on {project} in the same isolated workspace "
+                f"(Cursor session resume, revision {int(task.get('revision') or 1)}).",
+            )
+        else:
+            resume_chat_id = ""
+            target, branch = workspace.setup(task_id, project_config)
+            tasks.update_task(task_id, workspace=str(target), branch=branch)
+            task_events.record(
+                task_id,
+                "workspace_ready",
+                f"Workspace ready at {target.name}" + (f" (branch {branch})" if branch else ""),
+                stage="preparing_workspace",
+                detail={"workspace": str(target), "branch": branch or None},
+            )
+            _notify_milestone(
+                sender,
+                task_id,
+                "workspace_ready",
+                f"Workspace ready for {project} (isolated copy). Next: start Cursor agent process.",
+            )
 
         if _cancelled(task_id):
             return
@@ -103,6 +135,11 @@ def execute_task(task_id: str, *, job_id: int | None = None, fence: str | None =
             task["instruction"],
             project_instructions=str(project_config.get("instructions") or ""),
         )
+        if reuse_workspace:
+            prompt = (
+                "FOLLOW-UP TURN (continue prior agent session in this workspace):\n"
+                + prompt
+            )
 
         before_snapshot = workspace.file_snapshot(target) if not branch else None
 
@@ -215,8 +252,13 @@ def execute_task(task_id: str, *, job_id: int | None = None, fence: str | None =
                 on_heartbeat=_on_heartbeat,
                 on_stream_event=_on_stream_event,
                 evidence=evidence,
+                resume_chat_id=resume_chat_id or None,
             )
-            tasks.update_task(task_id, exit_code=exit_code, agent_pid=None)
+            session_id = (getattr(evidence, "session_id", None) or "").strip()
+            update_fields: dict = {"exit_code": exit_code, "agent_pid": None}
+            if session_id:
+                update_fields["agent_chat_id"] = session_id
+            tasks.update_task(task_id, **update_fields)
             cur_stage = (tasks.get_task(task_id) or {}).get("execution_stage") or "agent_running"
             task_events.record(
                 task_id,
@@ -227,6 +269,8 @@ def execute_task(task_id: str, *, job_id: int | None = None, fence: str | None =
                     "exit_code": exit_code,
                     "stream_events": evidence.raw_events,
                     "tools": evidence.tool_calls[:20],
+                    "session_id": session_id or None,
+                    "resumed": bool(resume_chat_id),
                 },
             )
 

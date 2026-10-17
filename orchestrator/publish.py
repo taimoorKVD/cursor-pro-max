@@ -19,6 +19,17 @@ def _run(argv: list[str], cwd=None, timeout: int = 60):
     return run(argv, cwd=cwd, timeout=timeout, env=publish_env())
 
 
+def _is_orchestrator_checkout(project_config: dict) -> bool:
+    """True when apply targets this running orchestrator’s source tree."""
+    from orchestrator import config as cfg
+
+    try:
+        target = Path(project_config["path"]).expanduser().resolve()
+        return target == Path(cfg.BASE).resolve()
+    except (OSError, KeyError, TypeError):
+        return False
+
+
 def _github_owner_repo(remote_url: str) -> tuple[str, str] | None:
     url = (remote_url or "").strip()
     m = re.search(r"github\.com[:/]([^/]+)/([^/.]+?)(?:\.git)?$", url, re.I)
@@ -236,8 +247,9 @@ def apply_to_local(task: dict, project_config: dict) -> str:
         raise RuntimeError(f"git status failed in {source}: {(dirty.stderr or '')[:300]}")
     if dirty.stdout.strip():
         raise ValueError(
-            f"Your local project at {source} has uncommitted changes. "
-            f"Stash or commit them, then say \"apply locally\" again for task {task['id']}."
+            f"Your local project at {source} has uncommitted changes, so I won't "
+            f"merge task {task['id']} yet. Stash or commit those changes on the "
+            f"laptop, then say \"apply locally\" again."
         )
 
     # Ensure the branch ref is visible from the main checkout (shared object store / worktree).
@@ -411,6 +423,11 @@ def publish(
             if errors:
                 detail += " Warnings: " + " | ".join(errors)
             detail += " No production deploy was run."
+            if do_apply and _is_orchestrator_checkout(project_config):
+                detail += (
+                    " Restart the orchestrator process so the new code is loaded "
+                    "(Python does not hot-reload)."
+                )
 
         tasks.update_task(task["id"], status="published", summary=detail[:4500])
         audit.record(

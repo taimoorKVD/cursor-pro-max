@@ -48,6 +48,7 @@ def initialize() -> None:
         _ensure_column(c, "tasks", "blocker", "TEXT")
         _ensure_column(c, "tasks", "revision", "INTEGER")
         _ensure_column(c, "tasks", "approved_sha", "TEXT")
+        _ensure_column(c, "tasks", "agent_chat_id", "TEXT")
         c.execute("CREATE TABLE IF NOT EXISTS incoming (message_id TEXT PRIMARY KEY)")
         c.execute(
             """CREATE TABLE IF NOT EXISTS jobs (

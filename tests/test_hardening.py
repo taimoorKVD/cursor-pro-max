@@ -197,7 +197,7 @@ def test_run_agent_recovers_blank_stdout_via_stream_evidence(tmp_path, monkeypat
         return FakeResult(0, "", "")
 
     monkeypatch.setattr(agent_mod, "ensure_auth", lambda force_login=False: (True, "ok"))
-    monkeypatch.setattr(agent_mod, "build_argv", lambda _w: ["agent", "-p"])
+    monkeypatch.setattr(agent_mod, "build_argv", lambda _w, **_k: ["agent", "-p"])
     from orchestrator import process as process_mod
 
     monkeypatch.setattr(process_mod, "run_tracked", fake_tracked)
@@ -237,7 +237,7 @@ def test_run_agent_retries_once_when_still_blank(tmp_path, monkeypatch):
         return FakeResult(0, "", "")
 
     monkeypatch.setattr(agent_mod, "ensure_auth", lambda force_login=False: (True, "ok"))
-    monkeypatch.setattr(agent_mod, "build_argv", lambda _w: ["agent", "-p"])
+    monkeypatch.setattr(agent_mod, "build_argv", lambda _w, **_k: ["agent", "-p"])
     from orchestrator import process as process_mod
 
     monkeypatch.setattr(process_mod, "run_tracked", fake_tracked)

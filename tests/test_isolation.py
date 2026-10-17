@@ -77,37 +77,56 @@ def test_windows_container_denies_outside_read(tmp_path):
 
 
 @pytest.mark.skipif(os.name != "nt", reason="AppContainer is Windows-only")
-def test_windows_container_can_realpath_agent_on_c_drive(tmp_path):
-    """Node realpath walks from the drive root; ancestors must be traversable."""
+def test_windows_agent_argv_skips_node_realpath_on_drive_root():
+    """Drive-root ACL grants are denied; Node must boot without realpathSync(C:\\)."""
+    from orchestrator import agent
+
+    argv = agent.resolve_agent_argv()
+    assert any(Path(p).name.lower() == "node.exe" for p in argv), argv
+    assert "--preserve-symlinks" in argv
+    assert "--preserve-symlinks-main" in argv
+
+
+@pytest.mark.skipif(os.name != "nt", reason="AppContainer is Windows-only")
+def test_windows_container_can_boot_node_on_c_drive(tmp_path):
+    """Contained node must start a main module under C:\\…\\cursor-agent without EPERM."""
+    import uuid
+
     from orchestrator import agent, win_boundary
 
     argv = agent.resolve_agent_argv()
-    exe = Path(argv[0])
-    assert exe.is_file(), f"agent binary missing: {exe}"
-    target = Path(argv[1]) if len(argv) > 1 and Path(argv[1]).suffix.lower() == ".js" else exe
-    ws = tmp_path / "ws"
-    ws.mkdir()
-    # Mimic agent.run_agent read grants: runtime dir + cursor-agent install root.
-    read_paths = [exe.parent]
-    for parent in exe.parents:
-        if parent.name.lower() == "cursor-agent":
-            read_paths.append(parent)
-            break
-    if target != exe:
-        read_paths.append(target.parent)
     node = next((Path(p) for p in argv if Path(p).name.lower() == "node.exe"), None)
     if node is None:
         pytest.skip("resolved agent entry is not node.exe + index.js")
-    proc = win_boundary.popen(
-        [str(node), "-e", f"console.log(require('fs').realpathSync({str(target)!r}))"],
-        cwd=ws,
-        env={"PATH": str(node.parent)},
-        read_paths=read_paths,
-        write_paths=[ws],
-    )
-    code = proc.wait(timeout=30)
-    out = (proc.stdout.read() if proc.stdout else "").strip()
-    err = (proc.stderr.read() if proc.stderr else "").strip()
-    assert code == 0, f"realpath failed exit={code} out={out!r} err={err!r}"
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    # Unique name under the granted runtime dir (avoids races with cleanup of fixed names).
+    probe = node.parent / f"_orch_boot_probe_{uuid.uuid4().hex}.js"
+    probe.write_text("console.log('boot-ok');\n", encoding="utf-8")
+    assert probe.is_file()
+    read_paths = [node.parent]
+    for parent in node.parents:
+        if parent.name.lower() == "cursor-agent":
+            read_paths.append(parent)
+            break
+    try:
+        proc = win_boundary.popen(
+            [
+                str(node),
+                "--preserve-symlinks",
+                "--preserve-symlinks-main",
+                str(probe),
+            ],
+            cwd=ws,
+            env={"PATH": str(node.parent)},
+            read_paths=read_paths,
+            write_paths=[ws],
+        )
+        code = proc.wait(timeout=30)
+        out = (proc.stdout.read() if proc.stdout else "").strip()
+        err = (proc.stderr.read() if proc.stderr else "").strip()
+    finally:
+        probe.unlink(missing_ok=True)
+    assert code == 0, f"boot failed exit={code} out={out!r} err={err!r}"
+    assert "boot-ok" in out
     assert "EPERM" not in err
-    assert out.lower().startswith(str(target.resolve())[:3].lower())
