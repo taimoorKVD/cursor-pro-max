@@ -53,7 +53,7 @@ Authoritative gap list: [docs/PRODUCTION_READINESS_GAP_ANALYSIS.md](docs/PRODUCT
    Copy-Item projects.example.json projects.json
    ```
 
-3. Edit `.env` and `projects.json`. Use **Windows paths** in `projects.json`. Set `AGENT_BIN=agent` or full path to Cursor CLI executable. Use your own WhatsApp number without `+` in `ALLOWED_WHATSAPP_NUMBERS`. For Git projects, ensure `git` is in PATH, the checkout has no uncommitted changes, a remote named `origin` exists, and Git push credentials work. Start with `DRY_RUN=true` and `allow_deploy=false`.
+3. Edit `.env` and `projects.json`. Use **Windows paths** in `projects.json`. Set `AGENT_BIN=agent` or full path to Cursor CLI executable. Use your own WhatsApp number without `+` in `ALLOWED_WHATSAPP_NUMBERS`. For Git projects, ensure `git` is in PATH, the checkout has no uncommitted changes, a remote named `origin` exists, and Git push credentials work. Start with `DRY_RUN=true` and `allow_deploy=false`. `WORKER_COUNT` (default 3, max 8) runs multiple Cursor agents in parallel — including multiple tasks on the same project, each in its own worktree.
 
 4. Start service:
 

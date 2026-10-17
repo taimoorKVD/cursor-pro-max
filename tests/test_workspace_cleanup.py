@@ -55,6 +55,46 @@ def test_setup_replaces_stale_git_worktree(tmp_path, monkeypatch):
     assert not (Path(config.WORK_ROOT) / "gitworktree01" / "missing").exists()
 
 
+def test_setup_allows_dirty_git_source_without_touching_wip(tmp_path, monkeypatch):
+    """Operator WIP stays in the main tree; worktree is a clean checkout of HEAD."""
+    monkeypatch.setenv("DATABASE_FILE", str(tmp_path / "t.sqlite"))
+    monkeypatch.setenv("WORK_ROOT", str(tmp_path / "work"))
+    config.settings.reload()
+    db.initialize()
+
+    src = tmp_path / "repo"
+    src.mkdir()
+    run(["git", "init"], cwd=str(src), timeout=30)
+    run(["git", "-C", str(src), "config", "user.email", "test@example.com"], timeout=15)
+    run(["git", "-C", str(src), "config", "user.name", "Test"], timeout=15)
+    (src / "readme.md").write_text("hi", encoding="utf-8")
+    run(["git", "-C", str(src), "add", "."], timeout=30)
+    run(["git", "-C", str(src), "commit", "-m", "init"], timeout=30)
+    (src / "wip.txt").write_text("local edits", encoding="utf-8")
+    (src / "readme.md").write_text("hi dirty", encoding="utf-8")
+
+    from orchestrator import preflight
+
+    ok, reason = preflight.project_ready("demo", {"path": str(src), "type": "git"})
+    assert ok is True, reason
+
+    target, branch = workspace.setup(
+        "dirtyok000001", {"path": str(src), "type": "git"}
+    )
+    assert target.exists()
+    assert branch == "wa/dirtyok000001"
+    # Source WIP must remain (critical for self-improving this orchestrator).
+    status = run(["git", "-C", str(src), "status", "--porcelain"], timeout=30)
+    assert status.returncode == 0
+    assert "readme.md" in status.stdout
+    assert "wip.txt" in status.stdout
+    assert (src / "readme.md").read_text(encoding="utf-8") == "hi dirty"
+    assert (src / "wip.txt").read_text(encoding="utf-8") == "local edits"
+    # Worktree is based on clean HEAD.
+    assert (target / "readme.md").read_text(encoding="utf-8") == "hi"
+    assert not (target / "wip.txt").exists()
+
+
 def test_remove_quarantines_when_rmtree_blocked(tmp_path, monkeypatch):
     """Locked dirs are renamed aside so the next setup is not a collision."""
     monkeypatch.setenv("DATABASE_FILE", str(tmp_path / "t.sqlite"))

@@ -206,6 +206,38 @@ def test_clear_activity_keeps_chat_messages(tmp_path, monkeypatch):
     assert 'id="clearActivityBtn"' in page.text
 
 
+def test_focus_task_and_inflight_count(tmp_path, monkeypatch):
+    client = _client(monkeypatch, tmp_path)
+    assert _login(client).status_code == 200
+
+    from orchestrator import session, tasks
+
+    tasks.create_task("focus00000001", "web:owner", "lifeos", "first agent")
+    tasks.create_task("focus00000002", "web:owner", "lifeos", "second agent")
+    tasks.update_task("focus00000001", status="running", execution_stage="agent_running")
+    tasks.update_task("focus00000002", status="queued", execution_stage="queued")
+    session.set_active_project("web:owner", "lifeos")
+    session.set_active_task("web:owner", "focus00000001", project="lifeos")
+
+    status = client.get("/chat/status").json()
+    assert status["inflight_count"] == 2
+    assert status["active_task"]["id"] == "focus00000001"
+
+    focused = client.post("/chat/focus-task", json={"task_id": "focus00000002"})
+    assert focused.status_code == 200
+    assert focused.json()["ok"] is True
+    assert focused.json()["task_id"] == "focus00000002"
+    ctx = session.get("web:owner")
+    assert ctx["active_task_id"] == "focus00000002"
+    assert ctx["active_project"] == "lifeos"
+
+    progress = client.get("/chat/task-progress").json()
+    assert progress["task"]["task_id"] == "focus00000002"
+
+    missing = client.post("/chat/focus-task", json={"task_id": "doesnotexist1"})
+    assert missing.status_code == 404
+
+
 def test_qr_page_local_only(tmp_path, monkeypatch):
     client = _client(monkeypatch, tmp_path)
     from orchestrator import webchat

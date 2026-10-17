@@ -12,9 +12,10 @@ import ctypes
 import msvcrt
 import os
 import subprocess
+import threading
 from ctypes import wintypes
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
 userenv = ctypes.WinDLL("userenv", use_last_error=True)
@@ -76,6 +77,8 @@ STILL_ACTIVE = 259
 _sid: int | None = None
 _sid_text: str | None = None
 _granted: set[tuple] = set()
+# Serialize icacls — concurrent workers thrashing ACLs can stall for many minutes.
+_GRANT_LOCK = threading.Lock()
 
 
 class SID_AND_ATTRIBUTES(ctypes.Structure):
@@ -216,32 +219,35 @@ def grant(path: Path, rights: str, *, recursive: bool = True) -> None:
     Set ``recursive=False`` for ancestor directories (drive roots / parents).
     Applying ``/T`` to ``C:\\`` would walk the whole volume.
     """
-    _sid_i, sid_text = appcontainer_sid()
     target = str(Path(path))
     token = (target.lower(), rights, bool(recursive))
     if token in _granted:
         return
-    cmd = ["icacls", target, "/grant", f"*{sid_text}:{rights}"]
-    if recursive:
-        cmd.append("/T")
-    cmd.extend(["/Q", "/C"])
-    result = subprocess.run(
-        cmd,
-        capture_output=True,
-        text=True,
-        timeout=120,
-        check=False,
-    )
-    detail = f"{result.stdout or ''}\n{result.stderr or ''}".strip()
-    lower = detail.lower()
-    # icacls often returns 0 with /C even when every target failed ("Access is denied").
-    if (
-        result.returncode != 0
-        or "access is denied" in lower
-        or "successfully processed 0 files" in lower
-    ):
-        raise OSError(f"icacls grant failed for {target}: {detail[:300]}")
-    _granted.add(token)
+    with _GRANT_LOCK:
+        if token in _granted:
+            return
+        _sid_i, sid_text = appcontainer_sid()
+        cmd = ["icacls", target, "/grant", f"*{sid_text}:{rights}"]
+        if recursive:
+            cmd.append("/T")
+        cmd.extend(["/Q", "/C"])
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=45,
+            check=False,
+        )
+        detail = f"{result.stdout or ''}\n{result.stderr or ''}".strip()
+        lower = detail.lower()
+        # icacls often returns 0 with /C even when every target failed ("Access is denied").
+        if (
+            result.returncode != 0
+            or "access is denied" in lower
+            or "successfully processed 0 files" in lower
+        ):
+            raise OSError(f"icacls grant failed for {target}: {detail[:300]}")
+        _granted.add(token)
 
 
 def grant_ancestors(path: Path) -> None:
@@ -336,19 +342,33 @@ def popen(
     env: dict[str, str],
     read_paths: list[Path],
     write_paths: list[Path],
+    cancel_check: Callable[[], bool] | None = None,
 ) -> ContainedProcess:
     """Start ``argv`` inside the AppContainer. ``cwd`` must be a write path."""
     sid, _text = appcontainer_sid()
+
+    def _cancelled() -> bool:
+        return bool(cancel_check and cancel_check())
+
     for path in read_paths:
+        if _cancelled():
+            raise RuntimeError("Cancelled during AppContainer ACL setup")
         resolved = Path(path)
         if resolved.exists():
             grant_ancestors(resolved)
-            grant(resolved, "(OI)(CI)(RX)")
+            # Recursive /T only on leaf runtime dirs (e.g. versions/<ver>).
+            # The cursor-agent install root is traverse-only — full /T is very slow.
+            recursive = resolved.name.lower() != "cursor-agent"
+            grant(resolved, "(OI)(CI)(RX)", recursive=recursive)
     for path in write_paths:
+        if _cancelled():
+            raise RuntimeError("Cancelled during AppContainer ACL setup")
         resolved = Path(path)
         resolved.mkdir(parents=True, exist_ok=True)
         grant_ancestors(resolved)
         grant(resolved, "(OI)(CI)(M)")
+    if _cancelled():
+        raise RuntimeError("Cancelled during AppContainer ACL setup")
 
     out_r, out_w = _pipe()
     err_r, err_w = _pipe()

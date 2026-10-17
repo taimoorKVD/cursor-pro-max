@@ -142,6 +142,19 @@ def complete(job_id: int, *, fence: str | None = None) -> bool:
         return cur.rowcount == 1
 
 
+def fail_running_for_task(task_id: str, error: str) -> int:
+    """Mark every running job for ``task_id`` failed (clear/cancel must free leases)."""
+    now = db.now()
+    with db.DB_LOCK, db.connect() as c:
+        cur = c.execute(
+            """UPDATE jobs
+               SET status='failed', leased_until=NULL, last_error=?, updated_at=?, fence=NULL
+               WHERE task_id=? AND status='running'""",
+            ((error or "cancelled")[:1000], now, task_id),
+        )
+        return int(cur.rowcount or 0)
+
+
 def fail(
     job_id: int,
     error: str,

@@ -185,6 +185,10 @@ def build_argv(
         "--output-format",
         out_fmt,
     ]
+    # Character-level assistant deltas so the Activity panel is not blank for
+    # long stretches between tool_call events.
+    if out_fmt == "stream-json":
+        argv.append("--stream-partial-output")
     # API key stays in the environment only. Never put it on argv (process list / logs).
     sandbox = _effective_sandbox()
     if sandbox:
@@ -462,6 +466,13 @@ def run_agent(
     err = result.stderr or ""
     if result.returncode:
         detail = (err or out or f"exit code {result.returncode}").strip()
+        if "SILENT_AGENT" in (err or ""):
+            raise RuntimeError(
+                "Cursor agent started inside Windows AppContainer but produced no "
+                "output (no stream-json). Tasks cannot complete in that mode on "
+                "this host. Set AGENT_ISOLATION_BREAK_GLASS=true in .env and "
+                "restart the orchestrator (same-user risk until AppContainer is fixed)."
+            )
         if "TIMEOUT" in (err or "") or result.returncode == -9:
             raise RuntimeError(
                 f"Cursor agent timed out after {config.AGENT_TIMEOUT_SEC}s. "

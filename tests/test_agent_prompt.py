@@ -24,6 +24,9 @@ def test_build_argv_uses_short_pointer(tmp_path, monkeypatch):
     argv = build_argv(tmp_path)
     assert "-p" in argv
     assert "--workspace" in argv
+    assert "--output-format" in argv
+    assert "stream-json" in argv
+    assert "--stream-partial-output" in argv
     assert argv[-1] == CLI_POINTER
     assert TASK_FILE in argv[-1]
     # Full task text must never appear as a CLI arg.

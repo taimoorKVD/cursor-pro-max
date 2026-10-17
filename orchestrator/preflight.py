@@ -34,13 +34,7 @@ def project_ready(project_id: str, project_config: dict) -> tuple[bool, str]:
         check = run(["git", "-C", str(source), "status", "--porcelain"], timeout=30)
         if check.returncode:
             return False, f"{project_id}: git status failed: {(check.stderr or check.stdout)[:300]}"
-        if check.stdout.strip():
-            dirty = len([ln for ln in check.stdout.splitlines() if ln.strip()])
-            return (
-                False,
-                f"{project_id}: git working tree has {dirty} uncommitted change(s). "
-                "Commit or stash in Laragon before running TASK (worktree requires a clean tree).",
-            )
+        # Dirty trees are OK: git worktree add checks out HEAD; WIP stays in the source.
     if not config.DRY_RUN:
         ok, detail = agent_available()
         if not ok:

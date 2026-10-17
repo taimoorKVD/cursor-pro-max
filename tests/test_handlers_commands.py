@@ -99,6 +99,54 @@ def test_classic_task_syntax_still_works(tmp_path, monkeypatch):
     assert "lifeos" in replies[-1].lower()
 
 
+def test_second_task_while_running_starts_parallel(tmp_path, monkeypatch):
+    replies = _setup(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        "orchestrator.handlers.projects.projects",
+        lambda: {
+            "lifeos": {
+                "path": str(tmp_path / "lifeos"),
+                "type": "local",
+                "allow_push": False,
+                "allow_deploy": False,
+                "deploy_command": "",
+                "test_command": "",
+            }
+        },
+    )
+    (tmp_path / "lifeos").mkdir()
+    monkeypatch.setattr("orchestrator.handlers.preflight.project_ready", lambda *a, **k: (True, "ok"))
+    from orchestrator import session, tasks
+
+    tasks.create_task("run0000000001", "web:owner", "lifeos", "first change")
+    tasks.update_task("run0000000001", status="running", execution_stage="agent_running")
+    session.set_active_task("web:owner", "run0000000001", project="lifeos")
+
+    handle("web:owner", "TASK lifeos: Add a second independent change")
+    assert "parallel" in replies[-1].lower()
+    assert "2 agents" in replies[-1].lower()
+    inflight = tasks.inflight_tasks_for_sender("web:owner", project="lifeos")
+    assert len(inflight) == 2
+    ctx = session.get("web:owner")
+    assert ctx["active_task_id"] != "run0000000001"
+    assert ctx["active_task_id"] in {t["id"] for t in inflight}
+
+
+def test_continue_work_while_running_reports_status_only(tmp_path, monkeypatch):
+    replies = _setup(tmp_path, monkeypatch)
+    from orchestrator import session, tasks
+
+    tasks.create_task("cont000000001", "web:owner", "lifeos", "ongoing work")
+    tasks.update_task("cont000000001", status="running", execution_stage="agent_running")
+    session.set_active_task("web:owner", "cont000000001", project="lifeos")
+    before = len(tasks.inflight_tasks_for_sender("web:owner", project="lifeos"))
+
+    handle("web:owner", "continue working")
+    assert "already running" in replies[-1].lower()
+    after = tasks.inflight_tasks_for_sender("web:owner", project="lifeos")
+    assert len(after) == before
+
+
 def test_chat_scan_and_register_project(tmp_path, monkeypatch):
     replies = _setup(tmp_path, monkeypatch)
     root = tmp_path / "www"

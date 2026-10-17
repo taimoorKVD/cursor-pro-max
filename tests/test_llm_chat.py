@@ -199,3 +199,11 @@ def test_handler_prefers_llm_intent(monkeypatch, tmp_path):
     handlers.handle("web:test", "what type of projects we've?")
     assert sent
     assert "lifeos" in sent[0].lower() or "projects" in sent[0].lower()
+
+
+def test_system_prompt_requires_parallel_task_for_new_work():
+    from orchestrator.llm_chat import _system_prompt
+
+    prompt = _system_prompt(REGISTRY, "")
+    assert "parallel Cursor agent" in prompt
+    assert "ONLY explicit continue/resume" in prompt

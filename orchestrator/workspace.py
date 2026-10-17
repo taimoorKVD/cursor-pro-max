@@ -165,6 +165,11 @@ def remove_for_task(
 
 
 def setup(task_id: str, project_config: dict) -> tuple[Path, str]:
+    """Create an isolated workspace. Returns ``(path, branch)``.
+
+    Git sources may be dirty: ``git worktree add`` checks out HEAD into a new
+    worktree and leaves the operator's uncommitted WIP untouched in the main tree.
+    """
     source = Path(project_config["path"]).expanduser().resolve(strict=True)
     if not source.is_dir():
         raise ValueError("Project path must be a directory")
@@ -180,9 +185,11 @@ def setup(task_id: str, project_config: dict) -> tuple[Path, str]:
                     "Clear chat or remove data/workspaces/" + task_id + " and try again."
                 )
     if project_config.get("type") == "git":
+        # Confirm git works; do not require a clean tree (dirty WIP stays in source).
         check = run(["git", "-C", str(source), "status", "--porcelain"], timeout=30)
-        if check.returncode or check.stdout.strip():
-            raise ValueError("Git source must have a clean working tree; commit/stash changes first")
+        if check.returncode:
+            detail = (check.stderr or check.stdout or "")[:300]
+            raise ValueError(f"git status failed: {detail or 'unknown error'}")
         branch = f"wa/{task_id}"
         # If a previous run left the branch behind, delete it so worktree add -b succeeds.
         existing = run(["git", "-C", str(source), "rev-parse", "--verify", branch], timeout=20)

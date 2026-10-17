@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import re
 import shlex
+import threading
 from pathlib import Path
 
 from orchestrator import agent, audit, config, db, projects, queue, task_events, tasks, workspace
@@ -157,31 +158,46 @@ def execute_task(task_id: str, *, job_id: int | None = None, fence: str | None =
             from orchestrator.agent_stream import StreamEvidence, stage_from_evidence
 
             evidence = StreamEvidence()
-            # Honest default: process alive without tool stream evidence yet.
+            # Do not claim the process started until on_pid — ACL/auth prep can
+            # take minutes and cancel must still be able to interrupt it.
             tasks.set_stage(task_id, "agent_running")
             task_events.record(
                 task_id,
-                "agent_started",
-                "Cursor agent process started — awaiting stream-json tool evidence",
+                "agent_starting",
+                task_events.AGENT_STARTING_DETAIL,
                 stage="agent_running",
             )
             _notify_milestone(
                 sender,
                 task_id,
-                "agent_started",
-                f"Cursor agent process started on {project}. "
-                f"{task_events.AGENT_UNAVAILABLE_DETAIL} "
-                "Stream events will be recorded when the CLI emits them.",
+                "agent_starting",
+                f"Starting Cursor agent on {project}. "
+                f"{task_events.AGENT_STARTING_DETAIL}",
             )
 
             def _on_pid(pid: int) -> None:
                 tasks.update_task(task_id, agent_pid=pid)
                 task_events.record(
                     task_id,
+                    "agent_started",
+                    "Cursor agent process started — awaiting stream-json tool evidence",
+                    stage="agent_running",
+                    detail={"pid": pid},
+                )
+                task_events.record(
+                    task_id,
                     "agent_pid",
                     f"Cursor agent pid={pid}",
                     stage="agent_running",
                     detail={"pid": pid},
+                )
+                _notify_milestone(
+                    sender,
+                    task_id,
+                    "agent_started",
+                    f"Cursor agent process started on {project} (pid {pid}). "
+                    f"{task_events.AGENT_UNAVAILABLE_DETAIL} "
+                    "Stream events will be recorded when the CLI emits them.",
                 )
 
             def _on_heartbeat(info: dict) -> None:
@@ -244,16 +260,42 @@ def execute_task(task_id: str, *, job_id: int | None = None, fence: str | None =
                             f"Stream evidence: agent is writing/editing files in {project}.",
                         )
 
-            agent_result, exit_code = agent.run_agent(
-                prompt,
-                target,
-                task_id=task_id,
-                on_pid=_on_pid,
-                on_heartbeat=_on_heartbeat,
-                on_stream_event=_on_stream_event,
-                evidence=evidence,
-                resume_chat_id=resume_chat_id or None,
+            stop_prep = threading.Event()
+
+            def _prep_heartbeat() -> None:
+                """Renew lease + honor cancel while auth/ACL runs (before pid)."""
+                while not stop_prep.wait(5.0):
+                    tasks.touch(task_id)
+                    if job_id is not None:
+                        queue.renew_lease(job_id, fence)
+                    if _cancelled(task_id):
+                        from orchestrator.process import cancel_tracked
+
+                        cancel_tracked(task_id)
+                        return
+
+            prep_thread = threading.Thread(
+                target=_prep_heartbeat,
+                name=f"agent-prep-{task_id}",
+                daemon=True,
             )
+            prep_thread.start()
+            try:
+                if _cancelled(task_id):
+                    raise RuntimeError("Cancelled before Cursor agent start")
+                agent_result, exit_code = agent.run_agent(
+                    prompt,
+                    target,
+                    task_id=task_id,
+                    on_pid=_on_pid,
+                    on_heartbeat=_on_heartbeat,
+                    on_stream_event=_on_stream_event,
+                    evidence=evidence,
+                    resume_chat_id=resume_chat_id or None,
+                )
+            finally:
+                stop_prep.set()
+                prep_thread.join(timeout=2)
             session_id = (getattr(evidence, "session_id", None) or "").strip()
             update_fields: dict = {"exit_code": exit_code, "agent_pid": None}
             if session_id:
@@ -369,17 +411,24 @@ def execute_task(task_id: str, *, job_id: int | None = None, fence: str | None =
             task_id=task_id,
             detail={"digest_prefix": digest[:16], "dry_run": config.DRY_RUN, "branch": branch or None},
         )
-        approve_hint = 'say "approve and push"'
         if project_config.get("type") == "git" and project_config.get("apply_local", True):
             if project_config.get("allow_push"):
-                approve_hint = (
-                    'say "approve and push" (local folder + review branch), '
-                    'or "create a pull request" (branch + GitHub PR)'
+                next_step = (
+                    'NEXT: tap Approve & apply (or say "approve and push") to update '
+                    "your local folder and review branch — or say \"create a pull request\". "
+                    'Say "reject that" to discard.'
                 )
             else:
-                approve_hint = (
-                    'say "approve and apply" or "apply locally" (updates your local project folder)'
+                next_step = (
+                    'NEXT: tap Approve & apply (or say "approve and apply") to copy '
+                    "these changes into your real project folder. "
+                    'Say "reject that" to discard.'
                 )
+        else:
+            next_step = (
+                'NEXT: tap Approve & apply (or say "approve and push") when ready. '
+                'Say "reject that" to discard.'
+            )
         file_bits = ""
         if modified:
             preview = ", ".join(modified[:8])
@@ -395,17 +444,25 @@ def execute_task(task_id: str, *, job_id: int | None = None, fence: str | None =
         else:
             send_text(
                 sender,
-                f"Finished working on {project} — ready for your review.\n\n"
-                f"{report[:2000]}{file_bits}\n\n"
-                "Isolated workspace only so far — your project folder is unchanged until you approve.\n"
-                f"If this looks good, {approve_hint}. "
-                'If not, say "reject that".',
+                f"Done — not stuck. Coding finished for {project}; waiting for your approval.\n\n"
+                f"{report[:1800]}{file_bits}\n\n"
+                "Your real project folder is unchanged until you approve "
+                "(open Activity for the Approve & apply button).\n"
+                f"{next_step}",
                 level="success",
             )
     except Exception as exc:
         log.exception("Task failed")
         err = str(exc)[:1000]
-        stage = "timeout" if re.search(r"timed out", err, re.I) else "failed"
+        if re.search(r"^cancelled\b", err, re.I):
+            stage = "canceled"
+            event_type = "canceled"
+        elif re.search(r"timed out", err, re.I):
+            stage = "timeout"
+            event_type = "timeout"
+        else:
+            stage = "failed"
+            event_type = "failed"
         live = tracked_info(task_id)
         tasks.update_task(
             task_id,
@@ -418,7 +475,7 @@ def execute_task(task_id: str, *, job_id: int | None = None, fence: str | None =
         )
         task_events.record(
             task_id,
-            "failed" if stage == "failed" else "timeout",
+            event_type,
             err[:800],
             stage=stage,
             detail={"process": live} if live else None,

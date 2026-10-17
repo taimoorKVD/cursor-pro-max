@@ -231,16 +231,85 @@ def _create_pull_request(task: dict, target: Path, project_config: dict) -> str:
     raise RuntimeError(f"Could not create pull request: {detail}")
 
 
+def _project_source(project_config: dict) -> Path:
+    source = Path(project_config["path"]).expanduser().resolve()
+    if not source.is_dir() or not (source / ".git").exists():
+        raise ValueError(f"Local project path is not a git repo: {source}")
+    return source
+
+
+def local_status(project_config: dict) -> dict:
+    """Return ``{dirty, paths, branch}`` for the operator's local checkout."""
+    source = _project_source(project_config)
+    status = _run(["git", "status", "--porcelain"], cwd=source, timeout=30)
+    if status.returncode:
+        raise RuntimeError(f"git status failed in {source}: {(status.stderr or '')[:300]}")
+    paths = [ln[3:].strip() if len(ln) > 3 else ln.strip() for ln in (status.stdout or "").splitlines() if ln.strip()]
+    branch = (_run(["git", "branch", "--show-current"], cwd=source, timeout=15).stdout or "").strip()
+    return {"dirty": bool(paths), "paths": paths, "branch": branch or "HEAD", "path": str(source)}
+
+
+def commit_local_project(project_config: dict, message: str) -> str:
+    """Commit tracked (+ untracked non-ignored) changes in the local project checkout.
+
+    Never force-adds ignored secrets (``.env`` stays out via normal gitignore rules).
+    """
+    source = _project_source(project_config)
+    info = local_status(project_config)
+    if not info["dirty"]:
+        return f"Nothing to commit in {source} — working tree already clean."
+    msg = (message or "").strip() or "chore: commit local WIP from orchestrator chat"
+    if len(msg) > 200:
+        msg = msg[:197] + "..."
+    # Stage tracked updates/deletes and any untracked files that are not ignored.
+    staged = _run(["git", "add", "-A"], cwd=source, timeout=60)
+    if staged.returncode:
+        raise RuntimeError(
+            "git add failed: " + (staged.stderr or staged.stdout or "")[-400:]
+        )
+    committed = _run(["git", "commit", "-m", msg], cwd=source, timeout=60)
+    if committed.returncode:
+        detail = (committed.stderr or committed.stdout or "")[-500:]
+        if "nothing to commit" in detail.lower():
+            return f"Nothing to commit in {source} (only ignored files were dirty)."
+        raise RuntimeError(f"git commit failed: {detail}")
+    sha = (_run(["git", "rev-parse", "--short", "HEAD"], cwd=source, timeout=15).stdout or "").strip()
+    n = len(info["paths"])
+    return (
+        f"Committed {n} local change(s) on {info['branch']} as {sha or 'HEAD'} "
+        f"in {source}: {msg}"
+    )
+
+
+def stash_local_project(project_config: dict, message: str = "") -> str:
+    """Stash local WIP (including untracked) so apply/merge can proceed."""
+    source = _project_source(project_config)
+    info = local_status(project_config)
+    if not info["dirty"]:
+        return f"Nothing to stash in {source} — working tree already clean."
+    label = (message or "").strip() or f"orchestrator-chat stash ({info['branch']})"
+    stashed = _run(
+        ["git", "stash", "push", "-u", "-m", label],
+        cwd=source,
+        timeout=90,
+    )
+    if stashed.returncode:
+        raise RuntimeError(
+            "git stash failed: " + (stashed.stderr or stashed.stdout or "")[-400:]
+        )
+    n = len(info["paths"])
+    return (
+        f"Stashed {n} local change(s) on {info['branch']} in {source}. "
+        'Say "apply locally" when ready; restore later with git stash pop on the laptop.'
+    )
+
+
 def apply_to_local(task: dict, project_config: dict) -> str:
     """Fast-forward (or merge) the task branch into the user's local project checkout."""
-    source = Path(project_config["path"]).expanduser().resolve()
+    source = _project_source(project_config)
     branch = (task.get("branch") or "").strip()
     if not branch:
         raise ValueError("No task branch to apply locally")
-    if not source.is_dir() or not (source / ".git").exists() and not (source / ".git").is_file():
-        # worktrees use .git file; still "exists"
-        if not (source / ".git").exists():
-            raise ValueError(f"Local project path is not a git repo: {source}")
 
     dirty = _run(["git", "status", "--porcelain"], cwd=source, timeout=30)
     if dirty.returncode:
@@ -248,8 +317,9 @@ def apply_to_local(task: dict, project_config: dict) -> str:
     if dirty.stdout.strip():
         raise ValueError(
             f"Your local project at {source} has uncommitted changes, so I won't "
-            f"merge task {task['id']} yet. Stash or commit those changes on the "
-            f"laptop, then say \"apply locally\" again."
+            f"merge task {task['id']} yet. In chat say "
+            f'"commit my local changes" or "stash my local changes", '
+            f'then "apply locally" (or "approve and push") again.'
         )
 
     # Ensure the branch ref is visible from the main checkout (shared object store / worktree).

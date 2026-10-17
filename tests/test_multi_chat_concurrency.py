@@ -69,6 +69,23 @@ def test_claim_next_allows_parallel_jobs(tmp_path, monkeypatch):
     assert queue.claim_next() is None
 
 
+def test_claim_next_allows_same_project_parallel_jobs(tmp_path, monkeypatch):
+    _init_db(tmp_path, monkeypatch)
+    tasks.create_task("aaaaaaaaaaaa", "web:owner", "lifeos", "dark mode")
+    tasks.create_task("bbbbbbbbbbbb", "web:owner", "lifeos", "form validation")
+    queue.enqueue("aaaaaaaaaaaa", kind="execute")
+    queue.enqueue("bbbbbbbbbbbb", kind="execute")
+
+    first = queue.claim_next()
+    second = queue.claim_next()
+    assert first is not None
+    assert second is not None
+    assert first["id"] != second["id"]
+    assert {first["task_id"], second["task_id"]} == {"aaaaaaaaaaaa", "bbbbbbbbbbbb"}
+    inflight = tasks.inflight_tasks_for_sender("web:owner", project="lifeos")
+    assert {t["id"] for t in inflight} == {"aaaaaaaaaaaa", "bbbbbbbbbbbb"}
+
+
 def test_multiple_worker_threads_claim_distinct_jobs(tmp_path, monkeypatch):
     _init_db(tmp_path, monkeypatch)
     monkeypatch.setenv("WORKER_COUNT", "3")

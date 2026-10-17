@@ -29,7 +29,9 @@ def _help() -> str:
         '- "Let\'s work on lifeos" then describe the bug\n'
         '- "What\'s remaining?" / "Done?" / "What changes did you make?"\n'
         '- "Show my tasks" or "Why is it stuck?"\n'
-        '- "Approve and apply" / "Apply locally" (or push) when review looks good\n'
+        '- "Approve and apply" / "Approve and push" / "Create a pull request" when review looks good\n'
+        '- "Commit my local changes" or "Stash my local changes" if apply is blocked by a dirty tree\n'
+        '- "Commit local and apply" to commit WIP then merge the review branch\n'
         '- "Continue working" to resume the same Cursor session when possible\n'
         '- "Reject that" to discard a review\n'
         '- "Set projects root C:/laragon/www" then "Scan projects" / "Add project velora"\n'
@@ -195,6 +197,12 @@ def _start_task(sender: str, project: str, instruction: str) -> None:
             ok=False,
         )
         return
+    other_inflight = [
+        t
+        for t in tasks.inflight_tasks_for_sender(sender, project=project)
+        if t.get("id")
+    ]
+    parallel_n = len(other_inflight)
     task_id = uuid.uuid4().hex[:12]
     tasks.create_task(task_id, sender, project, instruction)
     task_events.record(
@@ -210,18 +218,30 @@ def _start_task(sender: str, project: str, instruction: str) -> None:
         "task_queued",
         actor=sender,
         task_id=task_id,
-        detail={"project": project, "instruction_len": len(instruction)},
+        detail={
+            "project": project,
+            "instruction_len": len(instruction),
+            "parallel_with": parallel_n,
+        },
     )
     instr_preview = instruction.strip().replace("\n", " ")
     if len(instr_preview) > 220:
         instr_preview = instr_preview[:217] + "..."
+    parallel_note = ""
+    if parallel_n:
+        total = parallel_n + 1
+        parallel_note = (
+            f"\n\nStarting in parallel — {total} agents live on {project} "
+            "(open Activity to switch between them)."
+        )
     if config.DRY_RUN:
         send_text(
             sender,
             f"I'll investigate {project} in an isolated workspace (practice/dry-run — "
             "Cursor agent won't run yet).\n\n"
             f"Task created · {task_id}\n"
-            f"Request: {instr_preview}\n\n"
+            f"Request: {instr_preview}"
+            f"{parallel_note}\n\n"
             'Ask "what\'s remaining?" anytime for evidenced progress.',
             level="info",
         )
@@ -231,7 +251,8 @@ def _start_task(sender: str, project: str, instruction: str) -> None:
             f"I'll investigate {project} and work in an isolated workspace without "
             f"changing production.\n\n"
             f"Task created · {task_id} · Investigation pending\n"
-            f"Request: {instr_preview}\n\n"
+            f"Request: {instr_preview}"
+            f"{parallel_note}\n\n"
             'Ask "what\'s remaining?", "done?", or "what changes did you make?" for '
             "updates grounded in execution events.",
             level="success",
@@ -674,9 +695,12 @@ def handle(sender: str, body: str) -> None:
         task = _resolve_task(sender, intent.task_id)
         remembered = converse.last_work(sender)
         if task and task["status"] in {"queued", "running"}:
+            # Explicit continue/resume while already in flight: report status only.
+            # New change requests must arrive as kind=task (parallel agent).
             send_text(
                 sender,
-                _progress_reply(sender, "status", task),
+                "That task is already running — here's the latest:\n\n"
+                + _progress_reply(sender, "status", task),
                 level="info",
             )
             return
@@ -770,6 +794,75 @@ def handle(sender: str, body: str) -> None:
         )
         return
 
+    if intent.kind == "local_git":
+        from orchestrator import publish as publish_mod
+
+        action = (intent.action or "COMMIT").upper()
+        task = _resolve_task(sender, intent.task_id)
+        project = (intent.project or "").strip()
+        if not project and task:
+            project = str(task.get("project") or "")
+        if not project:
+            ctx = session.get(sender)
+            project = str(ctx.get("active_project") or "")
+        if not project:
+            send_text(
+                sender,
+                'Which project? Example: "commit local changes on whatsapp-cursor-orchestrator" '
+                'or focus a project first, then say "commit my local changes".',
+            )
+            return
+        resolved = next((n for n in registry if n.lower() == project.lower()), None)
+        if not resolved:
+            send_text(sender, f'No registered project named "{project}".')
+            return
+        project_config = registry[resolved]
+        if project_config.get("type") != "git":
+            send_text(sender, f"{resolved} isn't a git project, so I can't commit/stash there.")
+            return
+        try:
+            if action == "STASH":
+                detail = publish_mod.stash_local_project(
+                    project_config, intent.instruction or ""
+                )
+            else:
+                detail = publish_mod.commit_local_project(
+                    project_config, intent.instruction or ""
+                )
+        except Exception as exc:  # noqa: BLE001
+            send_text(sender, f"That didn't work:\n{str(exc)[:650]}", level="error")
+            audit.record(
+                "local_git_failed",
+                actor=sender,
+                detail={"project": resolved, "action": action, "error": str(exc)[:300]},
+                ok=False,
+            )
+            return
+        audit.record(
+            "local_git",
+            actor=sender,
+            detail={"project": resolved, "action": action},
+        )
+        send_text(sender, detail, level="success")
+        if action == "COMMIT_APPLY":
+            # Re-enter approve as APPLY after the tree is clean.
+            intent = converse.Intent(
+                kind="approve",
+                task_id=task["id"] if task else None,
+                action="APPLY",
+                raw=intent.raw,
+            )
+        else:
+            if task and task.get("status") in {"review", "publish_failed"}:
+                send_text(
+                    sender,
+                    f'Local tree is ready. Say "apply locally" or "approve and push" '
+                    f'for task {task["id"]} when you want the review branch merged.',
+                    level="info",
+                )
+            return
+        # fall through into approve when COMMIT_APPLY
+
     if intent.kind == "approve":
         task = _resolve_task(sender, intent.task_id)
         if not task:
@@ -777,7 +870,13 @@ def handle(sender: str, body: str) -> None:
             return
         action = intent.action or "PUSH"
         project_config = registry.get(task["project"], {})
-        retry_ok = action == "PR" and task["status"] == "publish_failed"
+        # Retry any publish action after a failed apply/push/PR.
+        retry_ok = task["status"] == "publish_failed" and action in {
+            "PUSH",
+            "APPLY",
+            "PR",
+            "DEPLOY",
+        }
         if task["status"] != "review" and not retry_ok:
             send_text(
                 sender,
@@ -912,7 +1011,9 @@ def handle(sender: str, body: str) -> None:
             return
         killed = cancel_tracked(task["id"])
         from orchestrator import db as _db
+        from orchestrator import queue as _queue
 
+        _queue.fail_running_for_task(task["id"], "Cancelled by user")
         tasks.update_task(
             task["id"],
             status="failed",

@@ -12,6 +12,28 @@ _LOCK = threading.Lock()
 _TRACKED: dict[str, dict[str, Any]] = {}
 
 
+def request_cancel(task_id: str) -> None:
+    """Mark a task cancel requested (works even before the subprocess exists)."""
+    with _LOCK:
+        item = _TRACKED.get(task_id)
+        if item is None:
+            _TRACKED[task_id] = {
+                "proc": None,
+                "argv": [],
+                "started": time.time(),
+                "alive": False,
+                "cancel": True,
+            }
+        else:
+            item["cancel"] = True
+
+
+def cancel_requested(task_id: str) -> bool:
+    with _LOCK:
+        item = _TRACKED.get(task_id)
+        return bool(item and item.get("cancel"))
+
+
 def run(
     argv: list[str],
     cwd: str | Path | None = None,
@@ -72,17 +94,42 @@ def run_tracked(
         # New process group so we can signal the tree more reliably.
         creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
 
+    started = time.time()
+    with _LOCK:
+        prior = _TRACKED.get(task_id) or {}
+        if prior.get("cancel"):
+            raise RuntimeError("Cancelled before Cursor agent start")
+        _TRACKED[task_id] = {
+            "proc": None,
+            "argv": list(argv),
+            "started": started,
+            "alive": True,
+            "cancel": False,
+        }
+
+    def _cancel_check() -> bool:
+        return cancel_requested(task_id)
+
     if contained and os.name == "nt":
         from orchestrator.win_boundary import popen as contained_popen
 
+        if _cancel_check():
+            with _LOCK:
+                _TRACKED.pop(task_id, None)
+            raise RuntimeError("Cancelled before Cursor agent start")
         proc = contained_popen(
             argv,
             cwd=Path(cwd) if cwd else Path("."),
             env=merged_env or {},
             read_paths=list(read_paths or []),
             write_paths=list(write_paths or ([Path(cwd)] if cwd else [])),
+            cancel_check=_cancel_check,
         )
     else:
+        if _cancel_check():
+            with _LOCK:
+                _TRACKED.pop(task_id, None)
+            raise RuntimeError("Cancelled before Cursor agent start")
         proc = subprocess.Popen(
             argv,
             cwd=str(cwd) if cwd else None,
@@ -97,14 +144,15 @@ def run_tracked(
             creationflags=creationflags,
             bufsize=1,
         )
-    started = time.time()
     with _LOCK:
-        _TRACKED[task_id] = {
-            "proc": proc,
-            "argv": list(argv),
-            "started": started,
-            "alive": True,
-        }
+        item = _TRACKED.get(task_id)
+        if item is None or item.get("cancel"):
+            kill_process_tree(getattr(proc, "pid", None))
+            with _LOCK:
+                _TRACKED.pop(task_id, None)
+            raise RuntimeError("Cancelled during Cursor agent start")
+        item["proc"] = proc
+        item["alive"] = True
     if on_pid:
         try:
             on_pid(proc.pid)
@@ -144,9 +192,26 @@ def run_tracked(
             if not item or item.get("proc") is not proc:
                 return
             code = proc.poll()
+            elapsed = int(time.time() - started)
+            # AppContainer + Cursor CLI can start a node PID then emit nothing forever.
+            # Fail fast instead of burning AGENT_TIMEOUT_SEC.
+            if (
+                contained
+                and code is None
+                and elapsed >= 45
+                and not stdout_chunks
+                and not stderr_chunks
+            ):
+                stderr_chunks.append(
+                    "\nSILENT_AGENT: Cursor agent produced no stdout inside "
+                    "AppContainer after 45s. Set AGENT_ISOLATION_BREAK_GLASS=true "
+                    "in .env (same-user risk) so tasks can complete on this host.\n"
+                )
+                kill_process_tree(proc.pid)
+                return
             info = {
                 "pid": proc.pid,
-                "elapsed_sec": int(time.time() - started),
+                "elapsed_sec": elapsed,
                 "alive": code is None,
                 "poll": code,
             }
@@ -203,14 +268,16 @@ def run_tracked(
 
 
 def cancel_tracked(task_id: str) -> bool:
-    """Kill the tracked process tree for task_id."""
+    """Kill the tracked process tree for task_id (or flag cancel during setup)."""
+    request_cancel(task_id)
     with _LOCK:
         item = _TRACKED.get(task_id)
     if not item:
         return False
     proc = item.get("proc")
     if not proc:
-        return False
+        # Setup still in progress (AppContainer ACL / CreateProcess) — flag is enough.
+        return True
     kill_process_tree(proc.pid)
     return True
 

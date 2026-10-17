@@ -489,6 +489,13 @@ CHAT_HTML = _CHAT_HEAD + r"""
       <strong id="progressStageLabel" class="work-compact-stage">No active task</strong>
       <span id="progressNow" class="work-compact-now mt-1 block">Start a coding task to see live progress</span>
       <div id="progressRail" class="work-rail mt-2.5" aria-hidden="true"></div>
+      <div id="activityReviewActions" class="activity-review-actions" hidden>
+        <p class="activity-review-hint">Coding finished — your project folder is unchanged until you approve.</p>
+        <div class="activity-review-btns">
+          <button type="button" id="activityApproveBtn" class="activity-review-approve">Approve &amp; apply</button>
+          <button type="button" id="activityRejectBtn" class="activity-review-reject">Reject</button>
+        </div>
+      </div>
     </section>
     <section class="flex min-h-0 flex-1 flex-col gap-1.5">
       <div class="work-feed-head">
@@ -518,6 +525,18 @@ CHAT_HTML = _CHAT_HEAD + r"""
   <span id="busyText" class="work-busy-text">Working on your request...</span>
   <button type="button" id="busyOpenProgress" class="work-busy-link">View activity</button>
 </div>
+<div id="reviewBanner" class="review-banner" hidden>
+  <div class="review-banner-copy">
+    <strong id="reviewBannerTitle">Ready for your approval</strong>
+    <span id="reviewBannerHint">Not stuck — coding finished. Apply to update your project, or reject.</span>
+  </div>
+  <div class="review-banner-btns">
+    <button type="button" id="bannerApproveBtn" class="activity-review-approve">Approve &amp; apply</button>
+    <button type="button" id="bannerCommitApplyBtn" class="activity-review-approve" hidden>Commit local &amp; apply</button>
+    <button type="button" id="bannerPushBtn" class="activity-review-reject">Approve &amp; push</button>
+    <button type="button" id="bannerRejectBtn" class="activity-review-reject">Reject</button>
+  </div>
+</div>
 <div id="quick" class="no-scrollbar flex shrink-0 gap-1.5 overflow-x-auto px-[max(12px,env(safe-area-inset-right,0px))] py-1.5 pl-[max(12px,env(safe-area-inset-left,0px))] [-webkit-overflow-scrolling:touch] min-[900px]:px-8">
   <button type="button" class="chip-btn" data-send="what projects do I have?">Projects</button>
   <button type="button" class="chip-btn" data-send="show my tasks">My tasks</button>
@@ -525,8 +544,12 @@ CHAT_HTML = _CHAT_HEAD + r"""
   <button type="button" class="chip-btn" data-send="what's remaining?">Remaining</button>
   <button type="button" class="chip-btn" data-send="what changes did you make?">Changes</button>
   <button type="button" class="chip-btn" data-fill="on ">Ask on a project...</button>
-  <button type="button" class="chip-btn" data-send="approve and push">Approve &amp; apply</button>
+  <button type="button" class="chip-btn" data-send="approve and apply">Approve &amp; apply</button>
+  <button type="button" class="chip-btn" data-send="approve and push">Approve &amp; push</button>
   <button type="button" class="chip-btn" data-send="apply locally">Apply locally</button>
+  <button type="button" class="chip-btn" data-send="commit my local changes">Commit local</button>
+  <button type="button" class="chip-btn" data-send="stash my local changes">Stash local</button>
+  <button type="button" class="chip-btn" data-send="commit local and apply">Commit &amp; apply</button>
   <button type="button" class="chip-btn" data-send="reject that">Reject</button>
   <button type="button" class="chip-btn" data-send="cancel that task">Cancel task</button>
   <button type="button" class="chip-btn" data-send="what can you do?">Help</button>
@@ -1198,6 +1221,7 @@ async function patchProjectFlags(id, fields) {
 async function removeRegisteredProject(id) {
   if (!window.confirm('Remove "' + id + '" from the registry? The folder on disk stays.')) return;
   try {
+    const wasActive = activeProject === id;
     const r = await fetch('/chat/projects/' + encodeURIComponent(id), {method: 'DELETE'});
     if (r.status === 401) { location.reload(); return; }
     const j = await r.json();
@@ -1205,9 +1229,13 @@ async function removeRegisteredProject(id) {
       showToast(j.error || 'Remove failed');
       return;
     }
-    if (activeProject === id) activeProject = '';
     showToast('Removed ' + id);
-    await refreshStatus();
+    // Stay on All Projects (do not jump to another registered project).
+    if (wasActive) {
+      await selectProject('');
+    } else {
+      await refreshStatus();
+    }
   } catch (e) {
     showToast('Remove failed');
   }
@@ -1306,6 +1334,23 @@ function add(m, {notify=false} = {}) {
   col.appendChild(meta);
   col.appendChild(bubble);
   if (!incoming) {
+    if (isReviewReadyMessage(m)) {
+      const cta = document.createElement('div');
+      cta.className = 'msg-review-cta';
+      const approve = document.createElement('button');
+      approve.type = 'button';
+      approve.className = 'activity-review-approve';
+      approve.textContent = 'Approve & apply';
+      approve.addEventListener('click', () => send('approve and apply'));
+      const reject = document.createElement('button');
+      reject.type = 'button';
+      reject.className = 'activity-review-reject';
+      reject.textContent = 'Reject';
+      reject.addEventListener('click', () => send('reject that'));
+      cta.appendChild(approve);
+      cta.appendChild(reject);
+      col.appendChild(cta);
+    }
     const actions = document.createElement('div');
     actions.className = 'msg-actions';
     const copyBtn = document.createElement('button');
@@ -1355,10 +1400,30 @@ function add(m, {notify=false} = {}) {
   return true;
 }
 
+function isReviewReadyMessage(m) {
+  if (!m || m.direction === 'in') return false;
+  const text = String(m.text || '');
+  if ((m.level || '') === 'success' && /ready for your (review|approval)|waiting for your approval|Done — not stuck/i.test(text)) {
+    return true;
+  }
+  return /ready for your review|approve and apply|Approve & apply/i.test(text)
+    && /unchanged until you approve|Isolated workspace only|waiting for your approval/i.test(text);
+}
+
 const progressPanel = document.getElementById('progressPanel');
 const activityDrawerBackdrop = document.getElementById('activityDrawerBackdrop');
 const activityDrawerClose = document.getElementById('activityDrawerClose');
 const activityHistory = document.getElementById('activityHistory');
+const activityReviewActions = document.getElementById('activityReviewActions');
+const activityApproveBtn = document.getElementById('activityApproveBtn');
+const activityRejectBtn = document.getElementById('activityRejectBtn');
+const reviewBanner = document.getElementById('reviewBanner');
+const reviewBannerTitle = document.getElementById('reviewBannerTitle');
+const reviewBannerHint = document.getElementById('reviewBannerHint');
+const bannerApproveBtn = document.getElementById('bannerApproveBtn');
+const bannerCommitApplyBtn = document.getElementById('bannerCommitApplyBtn');
+const bannerPushBtn = document.getElementById('bannerPushBtn');
+const bannerRejectBtn = document.getElementById('bannerRejectBtn');
 const progressToggle = document.getElementById('progressToggle');
 const progressMeta = document.getElementById('progressMeta');
 const progressStageLabel = document.getElementById('progressStageLabel');
@@ -1383,7 +1448,19 @@ let _selectedTaskId = '';
 let _renderedEventIds = new Set();
 let _lastHistorySig = '';
 let _recentTasksCache = [];
+let _knownTaskIds = new Set();
+let _inflightCount = 0;
 try { progressOpen = localStorage.getItem('orch_progress_open') === '1'; } catch (e) {}
+async function focusTaskOnServer(taskId) {
+  if (!taskId) return;
+  try {
+    await fetch('/chat/focus-task', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({task_id: taskId}),
+    });
+  } catch (e) { /* poll will reconcile */ }
+}
 function applyProgressChrome() {
   if (!progressPanel) return;
   progressPanel.classList.toggle('open', progressOpen);
@@ -1430,6 +1507,16 @@ if (activityDrawerBackdrop) {
 if (busyOpenProgress) {
   busyOpenProgress.addEventListener('click', () => openProgressPanel());
 }
+function wireApproveReject(btn, phrase) {
+  if (!btn) return;
+  btn.addEventListener('click', () => send(phrase));
+}
+wireApproveReject(activityApproveBtn, 'approve and apply');
+wireApproveReject(activityRejectBtn, 'reject that');
+wireApproveReject(bannerApproveBtn, 'approve and apply');
+wireApproveReject(bannerCommitApplyBtn, 'commit local and apply');
+wireApproveReject(bannerPushBtn, 'approve and push');
+wireApproveReject(bannerRejectBtn, 'reject that');
 function formatElapsed(sec) {
   sec = Math.max(0, Math.floor(sec || 0));
   if (sec < 60) return sec + 's';
@@ -1541,13 +1628,20 @@ function setIdleCurrentActivity() {
     progressRail.innerHTML = '';
     delete progressRail.dataset.sig;
   }
-  if (progressPanel) progressPanel.classList.add('idle');
+  if (progressPanel) {
+    progressPanel.classList.add('idle');
+    progressPanel.classList.remove('needs-review');
+  }
   if (progressLiveBadge) progressLiveBadge.hidden = true;
+  if (activityReviewActions) activityReviewActions.hidden = true;
+  setReviewBanner(false);
   setElapsedClock(0, false);
 }
 function resetProgressPanel() {
   _selectedTaskId = '';
   _recentTasksCache = [];
+  _knownTaskIds = new Set();
+  _inflightCount = 0;
   _lastHistorySig = '';
   setIdleCurrentActivity();
   if (progressToggle) progressToggle.classList.remove('working');
@@ -1596,10 +1690,11 @@ function renderActivityHistory(tasks, activeId) {
       + '</span>'
       + '<span class="activity-history-id">' + escapeHtml(String(t.id).slice(0, 8))
       + (live ? ' · live' : '') + '</span>';
-    btn.addEventListener('click', () => {
+    btn.addEventListener('click', async () => {
       _selectedTaskId = t.id;
       _renderedEventIds = new Set();
       _lastProgressSig = '';
+      await focusTaskOnServer(t.id);
       refreshProgress();
     });
     activityHistory.appendChild(btn);
@@ -1653,6 +1748,8 @@ async function refreshProgress() {
     const t = j.task;
     renderActivityHistory(_recentTasksCache, t ? t.task_id : _selectedTaskId);
     if (!t) {
+      if (activityReviewActions) activityReviewActions.hidden = true;
+      if (progressPanel) progressPanel.classList.remove('needs-review');
       if (!_selectedTaskId) {
         setIdleCurrentActivity();
         renderActivityHistory(_recentTasksCache, '');
@@ -1675,26 +1772,59 @@ async function refreshProgress() {
     const feed = stream.length ? stream : evs;
     const label = t.current_label || t.execution_stage || 'Working';
     const active = t.status === 'queued' || t.status === 'running' || t.status === 'publishing';
+    const needsReview = t.status === 'review';
     const latestMsg = feed.length ? (feed[feed.length - 1].message || '') : '';
-    const headSig = [t.task_id, t.status, t.execution_stage, label, latestMsg].join('|');
+    const headSig = [t.task_id, t.status, t.execution_stage, label, latestMsg, _inflightCount].join('|');
     const taskChanged = _lastProgressSig.split('|')[0] !== String(t.task_id || '');
-    progressPanel.classList.toggle('idle', !active);
-    if (progressLiveBadge) progressLiveBadge.hidden = !active;
+    progressPanel.classList.toggle('idle', !active && !needsReview);
+    progressPanel.classList.toggle('needs-review', needsReview);
+    if (progressLiveBadge) {
+      progressLiveBadge.hidden = !active && !needsReview;
+      if (needsReview) progressLiveBadge.innerHTML = '<span class="work-live-dot" aria-hidden="true"></span>Review';
+      else if (active) progressLiveBadge.innerHTML = '<span class="work-live-dot" aria-hidden="true"></span>Live';
+    }
+    if (activityReviewActions) activityReviewActions.hidden = !needsReview;
     setElapsedClock(t.started_at, active);
     if (headSig !== _lastProgressSig) {
       _lastProgressSig = headSig;
-      progressStageLabel.textContent = label;
+      progressStageLabel.textContent = needsReview
+        ? 'Ready for your approval'
+        : label;
       const latest = formatActivity(latestMsg || stageHint(t.execution_stage, t.status));
-      progressNow.innerHTML = latest.path
-        ? (latest.label ? (escapeHtml(latest.label) + ' · <code>' + escapeHtml(latest.path) + '</code>') : ('<code>' + escapeHtml(latest.path) + '</code>'))
-        : escapeHtml(latest.label || stageHint(t.execution_stage, t.status));
+      progressNow.innerHTML = needsReview
+        ? 'Coding finished — tap Approve &amp; apply below (project folder unchanged until then).'
+        : (latest.path
+          ? (latest.label ? (escapeHtml(latest.label) + ' · <code>' + escapeHtml(latest.path) + '</code>') : ('<code>' + escapeHtml(latest.path) + '</code>'))
+          : escapeHtml(latest.label || stageHint(t.execution_stage, t.status)));
       if (progressMeta) {
-        progressMeta.textContent = (t.project || '') + (t.task_id ? (' · ' + t.task_id) : '');
+        let meta = (t.project || '') + (t.task_id ? (' · ' + t.task_id) : '');
+        if (_inflightCount > 1) meta += ' · ' + _inflightCount + ' live';
+        if (needsReview) meta += ' · awaiting approval';
+        progressMeta.textContent = meta;
       }
       renderRail(t.execution_stage, t.status);
     }
     appendFeedItems(feed, {replace: taskChanged});
   } catch (e) { noteTransportFail(); }
+}
+function setReviewBanner(on, mode) {
+  if (!reviewBanner) return;
+  reviewBanner.hidden = !on;
+  if (!on) return;
+  const dirty = mode === 'dirty';
+  if (reviewBannerTitle) {
+    reviewBannerTitle.textContent = dirty
+      ? 'Apply blocked — local changes'
+      : 'Ready for your approval';
+  }
+  if (reviewBannerHint) {
+    reviewBannerHint.textContent = dirty
+      ? 'Commit or stash laptop WIP, then apply/push the review branch.'
+      : 'Not stuck — coding finished. Apply, push, or reject.';
+  }
+  if (bannerCommitApplyBtn) bannerCommitApplyBtn.hidden = !dirty;
+  if (bannerApproveBtn) bannerApproveBtn.hidden = false;
+  if (bannerPushBtn) bannerPushBtn.hidden = false;
 }
 function stageHint(stage, status) {
   if (status === 'review') return 'Ready for your review';
@@ -1754,10 +1884,47 @@ async function refreshStatus() {
     const scopedRecent = (j.recent_tasks || []).filter(t =>
       !activeProject || t.project === activeProject
     );
-    _recentTasksCache = scopedRecent.filter(t => !isClearedActivityTask(t));
-    const projectActive = scopedRecent.some(t =>
+    const nextCache = scopedRecent.filter(t => !isClearedActivityTask(t));
+    const liveScoped = nextCache.filter(t =>
       t.status === 'queued' || t.status === 'running' || t.status === 'publishing'
     );
+    const reviewScoped = nextCache.filter(t => t.status === 'review');
+    const publishFailedScoped = nextCache.filter(t => t.status === 'publish_failed');
+    _inflightCount = (typeof j.inflight_count === 'number')
+      ? j.inflight_count
+      : liveScoped.length;
+    // Prefer selected task for the approval banner; else newest review / failed publish.
+    let reviewTask = null;
+    if (_selectedTaskId) {
+      reviewTask = reviewScoped.find(t => t.id === _selectedTaskId)
+        || publishFailedScoped.find(t => t.id === _selectedTaskId)
+        || null;
+    }
+    if (!reviewTask && reviewScoped.length) reviewTask = reviewScoped[0];
+    if (!reviewTask && publishFailedScoped.length) reviewTask = publishFailedScoped[0];
+    const dirtyBlock = !!(reviewTask && reviewTask.status === 'publish_failed'
+      && /uncommitted changes/i.test(String(reviewTask.summary || reviewTask.blocker || '')));
+    setReviewBanner(!!reviewTask && !liveScoped.length, dirtyBlock ? 'dirty' : 'review');
+    // Auto-focus a newly created live task (Cursor focuses the agent you just started).
+    const seenBefore = _knownTaskIds.size > 0;
+    for (const t of nextCache) {
+      if (!_knownTaskIds.has(t.id)) {
+        const isLive = t.status === 'queued' || t.status === 'running' || t.status === 'publishing';
+        if (seenBefore && isLive) {
+          _selectedTaskId = t.id;
+          _renderedEventIds = new Set();
+          _lastProgressSig = '';
+          focusTaskOnServer(t.id);
+        }
+        _knownTaskIds.add(t.id);
+      }
+    }
+    // Drop selection only if the selected task disappeared from this project's history.
+    if (_selectedTaskId && !nextCache.some(t => t.id === _selectedTaskId)) {
+      _selectedTaskId = '';
+    }
+    _recentTasksCache = nextCache;
+    const projectActive = liveScoped.length > 0;
     const otherWorking = [...inflightProjects].some(p => p !== activeProject);
     busy.classList.toggle('on', projectActive || sending);
     if (progressToggle) progressToggle.classList.toggle('working', projectActive || otherWorking);
@@ -1766,15 +1933,19 @@ async function refreshStatus() {
     const busyEl = document.getElementById('busyText');
     if (sending && !projectActive) {
       busyEl.textContent = 'Sending your message…';
+    } else if (projectActive && _inflightCount > 1) {
+      busyEl.textContent = _inflightCount + ' agents working — open Activity to switch';
     } else if (projectActive) {
       busyEl.textContent = stageNice
         ? ('Agent working — ' + stageNice)
         : 'Agent working on your task…';
+    } else if (reviewTask) {
+      busyEl.textContent = 'Ready for approval — Approve & apply when it looks good';
     } else {
       busyEl.textContent = 'Working on your request…';
     }
     // Do not auto-open the drawer (that jerks the UI). Refresh quietly while open or working.
-    if (progressOpen || projectActive) {
+    if (progressOpen || projectActive || reviewTask) {
       await refreshProgress();
     } else {
       renderActivityHistory(_recentTasksCache, _selectedTaskId);
@@ -1895,6 +2066,8 @@ async function doClearChat() {
     }
   );
   if (!ok) return;
+  // Pin the project we are clearing so a later status/poll cannot jump chats.
+  const stayOn = activeProject || '';
   const r = await fetch('/chat/clear', {method: 'POST'});
   if (r.status === 401) { location.reload(); return; }
   if (!r.ok) { showToast('Clear failed'); return; }
@@ -1906,9 +2079,29 @@ async function doClearChat() {
         + (j.canceled ? (', ' + j.canceled + ' task(s) cancelled') : '');
     }
   } catch (e) {}
+  activeProject = stayOn;
   resetLog();
   resetProgressPanel();
-  await poll();
+  try {
+    const projQ = stayOn ? ('&project=' + encodeURIComponent(stayOn)) : '';
+    const full = await fetch('/chat/messages?after=0' + projQ, {cache: 'no-store'});
+    if (full.ok) {
+      const fj = await full.json();
+      for (const m of (fj.messages || [])) {
+        add(m, {notify: false});
+        if (m.id > last) last = m.id;
+      }
+      bootstrapped = true;
+      if (!last) {
+        const emptyEl = document.getElementById('empty');
+        if (emptyEl) {
+          emptyEl.innerHTML = stayOn
+            ? ('<strong class="' + EMPTY_TITLE + '">' + stayOn + '</strong>Fresh chat for this project. What should I change?')
+            : ('<strong class="' + EMPTY_TITLE + '">Hi</strong>What can I help you with?');
+        }
+      }
+    }
+  } catch (e) {}
   await refreshStatus();
   showToast(detail);
 }

@@ -749,6 +749,112 @@ html[data-theme="dark"] {
   .activity-drawer.idle .work-live-badge {
     display: none;
   }
+  .activity-drawer.needs-review .activity-drawer-sweep {
+    display: block;
+    background: color-mix(in srgb, var(--accent) 22%, transparent);
+  }
+  .activity-drawer.needs-review .activity-drawer-sweep::after {
+    animation: none;
+    width: 100%;
+    background: var(--accent);
+    opacity: 0.55;
+  }
+  .activity-review-actions {
+    margin-top: 0.85rem;
+    padding-top: 0.75rem;
+    border-top: 1px solid var(--line);
+  }
+  .activity-review-hint {
+    margin: 0 0 0.65rem;
+    font-size: 0.78rem;
+    line-height: 1.35;
+    color: var(--muted);
+  }
+  .activity-review-btns,
+  .review-banner-btns {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.45rem;
+  }
+  .activity-review-approve,
+  .activity-review-reject {
+    display: inline-flex;
+    min-height: 2.4rem;
+    align-items: center;
+    justify-content: center;
+    padding: 0.45rem 0.95rem;
+    border-radius: 999px;
+    border: 1px solid var(--line);
+    font-size: 0.82rem;
+    font-weight: 650;
+    cursor: pointer;
+    transition: background 0.15s ease, border-color 0.15s ease, transform 0.12s ease;
+  }
+  .activity-review-approve {
+    background: var(--accent);
+    border-color: transparent;
+    color: #fff;
+    box-shadow: 0 6px 14px rgba(0, 104, 74, 0.22);
+  }
+  .activity-review-approve:hover {
+    background: #00553d;
+  }
+  .activity-review-reject {
+    background: #fff;
+    color: var(--ink);
+  }
+  .activity-review-reject:hover {
+    border-color: #f0c4bf;
+    background: #fff5f4;
+    color: #b42318;
+  }
+  .activity-review-approve:active,
+  .activity-review-reject:active {
+    transform: scale(0.98);
+  }
+  .msg-review-cta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.45rem;
+    margin: 0.55rem 0 0.15rem;
+  }
+  .review-banner {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.65rem 0.85rem;
+    margin: 0 max(12px, env(safe-area-inset-right, 0px)) 0.35rem
+      max(12px, env(safe-area-inset-left, 0px));
+    padding: 0.7rem 0.85rem;
+    border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--line));
+    border-radius: 16px;
+    background: color-mix(in srgb, var(--accent-soft) 88%, #fff);
+  }
+  @media (min-width: 900px) {
+    .review-banner {
+      margin-left: 2rem;
+      margin-right: 2rem;
+    }
+  }
+  .review-banner[hidden] {
+    display: none !important;
+  }
+  .review-banner-copy {
+    display: grid;
+    gap: 0.15rem;
+    min-width: 0;
+    flex: 1 1 12rem;
+  }
+  .review-banner-copy strong {
+    font-size: 0.86rem;
+    color: var(--ink);
+  }
+  .review-banner-copy span {
+    font-size: 0.75rem;
+    line-height: 1.35;
+    color: var(--muted);
+  }
   .activity-drawer-sweep {
     position: absolute;
     top: 0;

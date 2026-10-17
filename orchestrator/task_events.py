@@ -53,6 +53,8 @@ STAGE_LABELS = {
 
 # Shown only while stage is agent_running and no read/write stream evidence yet.
 AGENT_UNAVAILABLE_DETAIL = "Agent running — detailed activity unavailable."
+# Before the Cursor subprocess exists (auth / AppContainer ACL prep can take a while).
+AGENT_STARTING_DETAIL = "Starting Cursor agent — preparing isolation (process not started yet)."
 
 
 def ensure_schema(conn) -> None:

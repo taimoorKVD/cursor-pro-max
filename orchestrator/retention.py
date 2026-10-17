@@ -66,6 +66,14 @@ def cleanup_sender_workspaces(
         if status in {"queued", "running", "publishing", "review"}:
             if status in {"queued", "running", "publishing"}:
                 cancel_tracked(tid)
+                # Free the worker lease even when cancel hits before Popen
+                # (stuck AppContainer ACL prep would otherwise hold the slot).
+                try:
+                    from orchestrator import queue
+
+                    queue.fail_running_for_task(tid, f"Cancelled: {reason_label}")
+                except Exception:  # noqa: BLE001
+                    pass
             tasks.update_task(
                 tid,
                 status="failed",

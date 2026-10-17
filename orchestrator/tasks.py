@@ -242,12 +242,25 @@ def active_task_for_sender(
     return None
 
 
+def inflight_tasks_for_sender(
+    sender: str, *, project: str | None = None, limit: int = 40
+) -> list[dict[str, Any]]:
+    """Queued/running/publishing tasks for sender (newest first)."""
+    rows = list_tasks_for_sender(sender, limit=limit)
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        if row.get("status") not in {"queued", "running", "publishing"}:
+            continue
+        if project and row.get("project") != project:
+            continue
+        out.append(row)
+    return out
+
+
 def inflight_projects_for_sender(sender: str) -> list[str]:
     """Project ids with queued/running/publishing work (newest first, unique)."""
     seen: list[str] = []
-    for row in list_tasks_for_sender(sender, limit=40):
-        if row.get("status") not in {"queued", "running", "publishing"}:
-            continue
+    for row in inflight_tasks_for_sender(sender):
         name = str(row.get("project") or "").strip()
         if name and name not in seen:
             seen.append(name)

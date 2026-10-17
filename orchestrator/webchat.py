@@ -603,6 +603,36 @@ def messages(request: Request, after: int = 0, project: str = "") -> JSONRespons
     )
 
 
+@router.post("/chat/focus-task")
+async def focus_task(request: Request) -> JSONResponse:
+    """Bind chat follow-ups (status/approve/cancel) to a selected Activity task."""
+    if not _authed(request):
+        return _json({"error": "Unauthorized"}, 401)
+    data = await _read_json(request)
+    if data is None:
+        return _json({"error": "Bad request"}, 400)
+    task_id = str(data.get("task_id") or "").strip().lower()
+    if not task_id:
+        return _json({"error": "task_id required"}, 400)
+    from orchestrator import session
+    from orchestrator.tasks import get_task
+
+    task = get_task(task_id)
+    if not task or task.get("sender") != SENDER:
+        return _json({"error": "Task not found"}, 404)
+    session.set_active_task(
+        SENDER, task["id"], project=str(task.get("project") or "") or None
+    )
+    return _json(
+        {
+            "ok": True,
+            "task_id": task["id"],
+            "project": task.get("project"),
+            "status": task.get("status"),
+        }
+    )
+
+
 @router.post("/chat/active-project")
 async def set_active_project_api(request: Request) -> JSONResponse:
     """Switch the operator's active project and return a fresh project-scoped thread."""
@@ -958,6 +988,7 @@ def status(request: Request) -> JSONResponse:
         active_task_for_sender,
         get_task,
         inflight_projects_for_sender,
+        inflight_tasks_for_sender,
         list_tasks_for_sender,
     )
 
@@ -975,6 +1006,7 @@ def status(request: Request) -> JSONResponse:
             active = candidate
     if not active:
         active = active_task_for_sender(SENDER, project=active_project)
+    project_inflight = inflight_tasks_for_sender(SENDER, project=active_project)
     return _json(
         {
             "ok": True,
@@ -1006,6 +1038,7 @@ def status(request: Request) -> JSONResponse:
             "worker_count": int(getattr(config, "WORKER_COUNT", 1) or 1),
             "active_project": active_project,
             "inflight_projects": inflight_projects_for_sender(SENDER),
+            "inflight_count": len(project_inflight),
             "active_task": (
                 {
                     "id": active["id"],
@@ -1022,6 +1055,8 @@ def status(request: Request) -> JSONResponse:
                     "project": t["project"],
                     "status": t["status"],
                     "execution_stage": t.get("execution_stage"),
+                    "summary": (t.get("summary") or "")[:240],
+                    "blocker": (t.get("blocker") or "")[:160],
                 }
                 for t in recent
                 if (t.get("execution_stage") or "") != "canceled"

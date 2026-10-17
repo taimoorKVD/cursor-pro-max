@@ -59,6 +59,13 @@ def snapshot(task: dict[str, Any]) -> dict[str, Any]:
     completed, remaining, current_label = task_events.completed_and_remaining(
         stage, task.get("status") or ""
     )
+    # Prefer an honest starting label until the Cursor pid exists.
+    if (
+        (task.get("status") or "") == "running"
+        and stage == "agent_running"
+        and not task.get("agent_pid")
+    ):
+        current_label = task_events.AGENT_STARTING_DETAIL
     events = task_events.list_events(task["id"], limit=50)
     return {
         "task_id": task["id"],

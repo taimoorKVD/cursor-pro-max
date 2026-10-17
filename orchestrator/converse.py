@@ -421,6 +421,36 @@ def parse_intent(text: str, registry: dict[str, Any], sender: str = "") -> Inten
     ):
         return Intent(kind="tasks", raw=raw)
 
+    # Commit / stash local project WIP (so apply/push is not blocked by a dirty tree)
+    if re.search(
+        r"\b(commit(\s+and\s+apply)?|stash)\b.*\b(local|wip|changes|uncommitted)\b|"
+        r"\b(commit|stash)\s+(my\s+)?(local\s+)?(changes|wip)\b|"
+        r"\b(commit|stash)\s+local\b|"
+        r"^(commit|stash)(\s+local)?(\s+changes)?$",
+        lowered,
+    ):
+        action = "STASH" if re.search(r"\bstash\b", lowered) else "COMMIT"
+        if action == "COMMIT" and re.search(r"\band\s+apply\b|\bthen\s+apply\b", lowered):
+            action = "COMMIT_APPLY"
+        msg = None
+        m_msg = re.search(
+            r"(?:commit(?:\s+and\s+apply)?|stash)\s+(?:my\s+)?"
+            r"(?:local\s+)?(?:changes)?\s*"
+            r"(?:with\s+message\s+|:\s*|—\s+|-\s+)(.+)$",
+            raw.strip(),
+            re.I,
+        )
+        if m_msg:
+            msg = m_msg.group(1).strip().strip("\"'")
+        return Intent(
+            kind="local_git",
+            project=None,
+            instruction=msg,
+            task_id=extract_task_id(raw),
+            action=action,
+            raw=raw,
+        )
+
     # Approve / reject / push / apply / deploy / cancel in natural language
     task_id = extract_task_id(raw)
     if re.search(r"\b(reject|discard)\b", lowered) and (

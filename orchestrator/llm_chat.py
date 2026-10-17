@@ -47,11 +47,12 @@ KINDS = frozenset(
         "approve",
         "reject",
         "cancel_task",
+        "local_git",
         "retry",
         "chat",
     }
 )
-ACTIONS = frozenset({"PUSH", "APPLY", "PR", "DEPLOY", "REJECT"})
+ACTIONS = frozenset({"PUSH", "APPLY", "PR", "DEPLOY", "REJECT", "COMMIT", "STASH", "COMMIT_APPLY"})
 REPLY_KINDS = frozenset(
     {
         "greet",
@@ -334,7 +335,11 @@ def _system_prompt(registry: dict[str, Any], sender: str) -> str:
         '- \"how long will it take?\" → kind \"estimate\" (reply null; server refuses unsupported ETAs)\n'
         '- \"what did you change?\" / \"which files?\" → kind \"changes\"\n'
         '- \"why is it stuck?\" / \"any errors?\" → kind \"stuck\"\n'
-        '- \"continue working\" → kind \"continue_work\"\n'
+        '- \"continue working\" / \"resume\" / \"keep going on that\" → kind \"continue_work\" '
+        "(ONLY explicit continue/resume wording — never for a new change request)\n"
+        "- If Recent tasks show queued/running/publishing work and the user describes a "
+        "NEW distinct change/bug/feature, kind=task (starts a parallel Cursor agent on "
+        "the same project). Do NOT fold a new request into continue_work or status.\n"
         '- \"do it again\", \"retry\", \"yeah let\'s do it again\" → kind \"retry\"\n'
         '- Asking what / which / how many / types of projects → kind \"projects\"\n'
         '- \"scan projects\" / find unregistered folders → kind \"scan_projects\" '
@@ -350,6 +355,9 @@ def _system_prompt(registry: dict[str, Any], sender: str) -> str:
         '- Wanting code changed but no project named → kind \"task_need_project\" '
         "(unless Active session has a project — then kind task)\n"
         '- Approve / push / apply / PR / deploy → kind \"approve\" with action\n'
+        '- \"commit my local changes\" / \"stash local changes\" / '
+        '\"commit local and apply\" → kind \"local_git\" with action '
+        "COMMIT, STASH, or COMMIT_APPLY (optional commit message in instruction)\n"
         '- Reject / discard → kind \"reject\"\n'
         '- Cancel a running task → kind \"cancel_task\"\n'
         '- Cancel clarifying a question → kind \"cancel\"\n'
@@ -479,6 +487,8 @@ def _parse_payload(data: dict[str, Any], registry: dict[str, Any], raw: str) -> 
         action_s = "PUSH"
     if kind == "reject":
         action_s = "REJECT"
+    if kind == "local_git" and action_s not in {"COMMIT", "STASH", "COMMIT_APPLY"}:
+        action_s = "COMMIT"
 
     reply_s = _clean_reply(data.get("reply"))
     if kind not in REPLY_KINDS:
