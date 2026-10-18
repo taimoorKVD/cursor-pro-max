@@ -139,6 +139,16 @@ def test_parse_scan_register_update_remove_projects():
     assert upd.project == "lifeos"
     assert upd.updates == {"allow_push": True}
 
+    rename = parse_intent("rename chat lifeos to My App", REGISTRY)
+    assert rename.kind == "update_project"
+    assert rename.project == "lifeos"
+    assert rename.updates == {"display_name": "My App"}
+
+    rename_proj = parse_intent("change project name of kv-hrms to HR Portal", REGISTRY)
+    assert rename_proj.kind == "update_project"
+    assert rename_proj.project == "kv-hrms"
+    assert rename_proj.updates == {"display_name": "HR Portal"}
+
     rem = parse_intent("remove project velora", REGISTRY)
     assert rem.kind == "remove_project" and rem.project == "velora"
 
@@ -150,6 +160,24 @@ def test_parse_scan_register_update_remove_projects():
     assert yes.kind == "remove_project"
     assert yes.action == "CONFIRM"
     assert yes.project == "velora"
+
+
+def test_rename_active_chat_uses_session_project(monkeypatch):
+    import orchestrator.session as session_mod
+
+    monkeypatch.setattr(
+        session_mod,
+        "get",
+        lambda sender: {"active_project": "lifeos", "active_task_id": None},
+    )
+    rename_active = parse_intent(
+        "change chat name to Weekend Build",
+        REGISTRY,
+        sender="web:rename",
+    )
+    assert rename_active.kind == "update_project"
+    assert rename_active.project == "lifeos"
+    assert rename_active.updates == {"display_name": "Weekend Build"}
 
 
 def test_retry_uses_remembered_work():

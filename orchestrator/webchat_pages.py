@@ -445,7 +445,12 @@ CHAT_HTML = _CHAT_HEAD + r"""
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M5 8.5c0-2 1.8-3.5 4-3.5h6c2.2 0 4 1.5 4 3.5v4c0 2-1.8 3.5-4 3.5h-2.2L9 19v-3H9c-2.2 0-4-1.5-4-3.5z"/><circle cx="10" cy="10.5" r="1" fill="currentColor" stroke="none"/><circle cx="14" cy="10.5" r="1" fill="currentColor" stroke="none"/></svg>
     </div>
     <div class="min-w-0 flex-1">
-      <strong class="block truncate font-display text-[1.08rem] leading-[1.05] tracking-[-.02em]">Cursor Orchestrator</strong>
+      <div class="flex min-w-0 items-center gap-1">
+        <strong id="chatTitle" class="block min-w-0 truncate font-display text-[1.08rem] leading-[1.05] tracking-[-.02em]">Cursor Orchestrator</strong>
+        <button type="button" id="renameChatBtn" class="hdr-icon-btn !size-7 shrink-0 hidden" title="Rename chat" aria-label="Rename chat">
+          <svg class="size-3.5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+        </button>
+      </div>
       <span id="pill" class="group mt-0.5 flex min-w-0 items-center gap-1.5 text-[10.5px] text-muted"><span class="size-[7px] shrink-0 rounded-full bg-[#9aa8a1] group-[.live]:animate-dot group-[.live]:bg-ok group-[.off]:bg-bad"></span><span id="pillText" class="truncate">Connecting...</span></span>
     </div>
   </div>
@@ -587,6 +592,21 @@ CHAT_HTML = _CHAT_HEAD + r"""
     </div>
   </div>
 </div>
+<div id="renameChatModal" class="confirm-modal !z-[80]" hidden aria-hidden="true">
+  <div class="confirm-backdrop" data-rename-cancel></div>
+  <div class="confirm-card !max-w-[min(94vw,400px)] !items-stretch" role="dialog" aria-modal="true" aria-labelledby="renameChatTitle">
+    <strong id="renameChatTitle" class="confirm-title text-left">Rename chat</strong>
+    <p id="renameChatHint" class="confirm-msg !text-left !mt-1">Choose a display name for this chat. The project id stays the same.</p>
+    <label class="mt-2 block">
+      <span class="mb-1 block text-[11px] font-semibold text-muted">Chat name</span>
+      <input id="renameChatInput" class="w-full rounded-xl border border-line bg-white px-3 py-2.5 text-[14px] text-ink outline-none placeholder:text-[#8a9a93] focus:border-accent/40" type="text" maxlength="80" autocomplete="off" spellcheck="false" placeholder="Chat name">
+    </label>
+    <div class="confirm-actions !mt-3">
+      <button type="button" id="renameChatCancel" class="confirm-btn confirm-btn-ghost" data-rename-cancel>Cancel</button>
+      <button type="button" id="renameChatSave" class="confirm-btn confirm-btn-primary">Save</button>
+    </div>
+  </div>
+</div>
 <div id="folderPickerModal" class="confirm-modal !z-[80]" hidden aria-hidden="true">
   <div class="confirm-backdrop" data-folder-cancel></div>
   <div class="confirm-card !max-w-[min(94vw,420px)] !items-stretch !p-0" role="dialog" aria-modal="true" aria-labelledby="folderPickerTitle">
@@ -683,6 +703,13 @@ function noteTransportFail() {
 let activeProject = '';
 let allProjects = [];
 let inflightProjects = new Set();
+let renameChatTarget = '';
+const chatTitle = document.getElementById('chatTitle');
+const renameChatBtn = document.getElementById('renameChatBtn');
+const renameChatModal = document.getElementById('renameChatModal');
+const renameChatInput = document.getElementById('renameChatInput');
+const renameChatHint = document.getElementById('renameChatHint');
+const renameChatSave = document.getElementById('renameChatSave');
 const seenMsgIds = new Set();
 const LEVEL_TITLE = {success:'Ready', error:'Needs attention', warning:'Heads up', info:'Update'};
 const LEVEL_LABEL = {success:'Ready', error:'Needs attention', warning:'Heads up'};
@@ -912,6 +939,29 @@ function pushNotify(m) {
   }
 }
 
+function projectDisplayName(id) {
+  if (!id) return '';
+  const p = allProjects.find(x => x.id === id);
+  return (p && (p.name || p.display_name)) || id;
+}
+
+function updateChatTitle() {
+  const label = activeProject ? projectDisplayName(activeProject) : 'Cursor Orchestrator';
+  if (chatTitle) {
+    chatTitle.textContent = label;
+    chatTitle.title = activeProject
+      ? (projectDisplayName(activeProject) + ' (' + activeProject + ')')
+      : 'All projects';
+  }
+  if (renameChatBtn) {
+    renameChatBtn.classList.toggle('hidden', !activeProject);
+    renameChatBtn.disabled = !activeProject;
+  }
+  document.title = activeProject
+    ? (projectDisplayName(activeProject) + ' · Orchestrator')
+    : 'Orchestrator';
+}
+
 function renderProjects(filter) {
   const q = (filter || '').trim().toLowerCase();
   const items = allProjects.filter(p => {
@@ -955,6 +1005,7 @@ function renderProjects(filter) {
       projectList.appendChild(b);
     }
   }
+  updateChatTitle();
   renderManageRegistry();
 }
 
@@ -971,14 +1022,15 @@ function renderManageRegistry() {
   }
   for (const p of allProjects) {
     const id = String(p.id || p.name || '').trim() || 'unknown';
+    const display = String(p.name || p.display_name || id).trim() || id;
     const row = document.createElement('div');
     row.className = 'manage-proj-row';
     const top = document.createElement('div');
     top.className = 'manage-proj-top';
     const title = document.createElement('div');
     title.className = 'manage-proj-name';
-    title.textContent = id;
-    title.title = p.path || id;
+    title.textContent = display;
+    title.title = display === id ? (p.path || id) : (id + (p.path ? ' · ' + p.path : ''));
     const actions = document.createElement('div');
     actions.className = 'manage-proj-actions';
     const pushLabel = document.createElement('label');
@@ -999,6 +1051,12 @@ function renderManageRegistry() {
     applyCb.addEventListener('change', () => patchProjectFlags(id, {apply_local: applyCb.checked}));
     applyLabel.appendChild(applyCb);
     applyLabel.appendChild(document.createTextNode('apply'));
+    const renameBtn = document.createElement('button');
+    renameBtn.type = 'button';
+    renameBtn.className = 'manage-proj-remove';
+    renameBtn.textContent = 'Rename';
+    renameBtn.title = 'Change chat name';
+    renameBtn.addEventListener('click', () => openRenameChat(id));
     const removeBtn = document.createElement('button');
     removeBtn.type = 'button';
     removeBtn.className = 'manage-proj-remove';
@@ -1006,13 +1064,14 @@ function renderManageRegistry() {
     removeBtn.addEventListener('click', () => removeRegisteredProject(id));
     actions.appendChild(pushLabel);
     actions.appendChild(applyLabel);
+    actions.appendChild(renameBtn);
     actions.appendChild(removeBtn);
     top.appendChild(title);
     top.appendChild(actions);
     const meta = document.createElement('div');
     meta.className = 'manage-proj-meta';
-    meta.textContent = (p.type || 'local') + (p.path ? ' · ' + p.path : '');
-    meta.title = p.path || '';
+    meta.textContent = id + ' · ' + (p.type || 'local') + (p.path ? ' · ' + p.path : '');
+    meta.title = p.path || id;
     row.appendChild(top);
     row.appendChild(meta);
     manageRegistryList.appendChild(row);
@@ -1242,13 +1301,71 @@ async function patchProjectFlags(id, fields) {
     if (!r.ok) {
       showToast(j.error || 'Update failed');
       await refreshStatus();
-      return;
+      return false;
     }
-    showToast('Updated ' + id);
+    if (fields && fields.display_name) {
+      showToast('Renamed to ' + String(fields.display_name).trim());
+    } else {
+      showToast('Updated ' + id);
+    }
     await refreshStatus();
+    return true;
   } catch (e) {
     showToast('Update failed');
+    return false;
   }
+}
+
+function closeRenameChat() {
+  if (!renameChatModal) return;
+  renameChatModal.hidden = true;
+  renameChatModal.setAttribute('aria-hidden', 'true');
+  renameChatModal.classList.remove('open');
+  renameChatTarget = '';
+}
+
+function openRenameChat(id) {
+  const projectId = (id || activeProject || '').trim();
+  if (!projectId) {
+    showToast('Select a project chat first');
+    return;
+  }
+  renameChatTarget = projectId;
+  if (renameChatHint) {
+    renameChatHint.textContent = 'Display name for "' + projectId + '". The project id stays the same.';
+  }
+  if (renameChatInput) {
+    renameChatInput.value = projectDisplayName(projectId);
+  }
+  if (!renameChatModal) return;
+  renameChatModal.hidden = false;
+  renameChatModal.setAttribute('aria-hidden', 'false');
+  renameChatModal.classList.add('open');
+  setTimeout(() => {
+    if (!renameChatInput) return;
+    renameChatInput.focus();
+    renameChatInput.select();
+  }, 30);
+}
+
+async function saveRenameChat() {
+  const projectId = (renameChatTarget || activeProject || '').trim();
+  const name = (renameChatInput && renameChatInput.value || '').trim();
+  if (!projectId) {
+    showToast('Select a project chat first');
+    return;
+  }
+  if (!name) {
+    showToast('Enter a chat name');
+    if (renameChatInput) renameChatInput.focus();
+    return;
+  }
+  if (name === projectDisplayName(projectId)) {
+    closeRenameChat();
+    return;
+  }
+  const ok = await patchProjectFlags(projectId, {display_name: name});
+  if (ok) closeRenameChat();
 }
 
 async function removeRegisteredProject(id) {
@@ -1301,20 +1418,22 @@ async function selectProject(id) {
     if (!last) {
       const emptyEl = document.getElementById('empty');
       if (emptyEl) {
+        const label = id ? projectDisplayName(id) : '';
         emptyEl.innerHTML = id
-          ? ('<strong class="' + EMPTY_TITLE + '">' + id + '</strong>Fresh chat for this project. What should I change?')
+          ? ('<strong class="' + EMPTY_TITLE + '">' + label + '</strong>Fresh chat for this project. What should I change?')
           : ('<strong class="' + EMPTY_TITLE + '">Hi</strong>What can I help you with?');
       }
     }
     if (stick) log.scrollTop = log.scrollHeight;
-    showToast(id ? ('Switched to ' + id) : 'Showing all projects');
+    showToast(id ? ('Switched to ' + projectDisplayName(id)) : 'Showing all projects');
     await refreshStatus();
   } catch (e) {
     showToast('Could not switch project');
   }
+  updateChatTitle();
   if (id) {
     txt.value = '';
-    txt.placeholder = 'Message about ' + id + '…';
+    txt.placeholder = 'Message about ' + projectDisplayName(id) + '…';
     txt.focus();
     autoSize();
   } else {
@@ -2079,7 +2198,7 @@ async function poll() {
         const emptyEl = document.getElementById('empty');
         if (emptyEl) {
           emptyEl.innerHTML = activeProject
-            ? ('<strong class="' + EMPTY_TITLE + '">' + activeProject + '</strong>Fresh chat for this project. What should I change?')
+            ? ('<strong class="' + EMPTY_TITLE + '">' + projectDisplayName(activeProject) + '</strong>Fresh chat for this project. What should I change?')
             : ('<strong class="' + EMPTY_TITLE + '">Hi</strong>What can I help you with?');
         }
       }
@@ -2099,7 +2218,7 @@ async function poll() {
     if (added && stick) log.scrollTop = log.scrollHeight;
     if (!last && emptyEl) {
       emptyEl.innerHTML = activeProject
-        ? ('<strong class="' + EMPTY_TITLE + '">' + activeProject + '</strong>Fresh chat for this project. What should I change?')
+        ? ('<strong class="' + EMPTY_TITLE + '">' + projectDisplayName(activeProject) + '</strong>Fresh chat for this project. What should I change?')
         : ('<strong class="' + EMPTY_TITLE + '">Hi</strong>What can I help you with?');
     }
     syncJump();
@@ -2184,7 +2303,7 @@ async function doClearChat() {
         const emptyEl = document.getElementById('empty');
         if (emptyEl) {
           emptyEl.innerHTML = stayOn
-            ? ('<strong class="' + EMPTY_TITLE + '">' + stayOn + '</strong>Fresh chat for this project. What should I change?')
+            ? ('<strong class="' + EMPTY_TITLE + '">' + projectDisplayName(stayOn) + '</strong>Fresh chat for this project. What should I change?')
             : ('<strong class="' + EMPTY_TITLE + '">Hi</strong>What can I help you with?');
         }
       }
@@ -2316,8 +2435,32 @@ if (folderPickerModal) {
     el.addEventListener('click', () => closeFolderPicker());
   });
 }
+if (renameChatBtn) {
+  renameChatBtn.addEventListener('click', () => openRenameChat(activeProject));
+}
+if (renameChatSave) {
+  renameChatSave.addEventListener('click', () => saveRenameChat());
+}
+if (renameChatModal) {
+  renameChatModal.querySelectorAll('[data-rename-cancel]').forEach((el) => {
+    el.addEventListener('click', () => closeRenameChat());
+  });
+}
+if (renameChatInput) {
+  renameChatInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      saveRenameChat();
+    }
+  });
+}
 document.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
+  if (renameChatModal && !renameChatModal.hidden) {
+    e.preventDefault();
+    closeRenameChat();
+    return;
+  }
   if (folderPickerModal && !folderPickerModal.hidden) {
     e.preventDefault();
     closeFolderPicker();

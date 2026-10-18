@@ -36,7 +36,8 @@ def _help() -> str:
         '- "Continue working" to resume the same Cursor session when possible\n'
         '- "Reject that" to discard a review\n'
         '- "Set projects root C:/laragon/www" then "Scan projects" / "Add project velora"\n'
-        '- "Update project lifeos set allow_push true"\n\n'
+        '- "Update project lifeos set allow_push true"\n'
+        '- "Rename chat lifeos to My App" or "Change chat name to My App"\n\n'
         "Status answers come from real execution events — I won't invent progress."
     )
 
@@ -631,10 +632,18 @@ def _handle_inner(sender: str, body: str) -> None:
     if intent.kind == "update_project":
         project = (intent.project or "").strip()
         updates = intent.updates or {}
-        if not project or not updates:
+        rename_only = set(updates) == {"display_name"}
+        if not updates:
             send_text(
                 sender,
                 'Example: "update project lifeos set allow_push true".',
+            )
+            return
+        if not project:
+            send_text(
+                sender,
+                'Select a project chat first, or say '
+                '"rename chat lifeos to My App".',
             )
             return
         # Resolve case-insensitive id
@@ -644,12 +653,22 @@ def _handle_inner(sender: str, body: str) -> None:
         except projects.ProjectConfigError as exc:
             send_text(sender, str(exc))
             return
-        bits = ", ".join(f"{k}={updates[k]!r}" for k in sorted(updates))
-        send_text(
-            sender,
-            f"Updated {updated['id']}: {bits}.",
-            level="info",
-        )
+        if rename_only:
+            new_name = str(
+                updated.get("display_name") or updates.get("display_name") or ""
+            ).strip()
+            send_text(
+                sender,
+                f'Renamed chat "{updated["id"]}" to "{new_name}".',
+                level="info",
+            )
+        else:
+            bits = ", ".join(f"{k}={updates[k]!r}" for k in sorted(updates))
+            send_text(
+                sender,
+                f"Updated {updated['id']}: {bits}.",
+                level="info",
+            )
         audit.record(
             "project_updated",
             actor=sender,

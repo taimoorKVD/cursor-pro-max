@@ -588,6 +588,44 @@ def parse_intent(text: str, registry: dict[str, Any], sender: str = "") -> Inten
             raw=raw,
         )
 
+    # Rename chat / project display name (keeps project id).
+    # Prefer the "... name ..." forms first so "name" is not treated as an id.
+    rename_name = re.fullmatch(
+        r"(?:rename|change|set)\s+(?:(?:the|this)\s+)?(?:chat|project)\s+name"
+        r"(?:\s+(?:of|for)\s+([a-zA-Z0-9_-]+))?\s+(?:to|as|=)\s+(.+)",
+        raw,
+        re.I | re.S,
+    )
+    rename_id = re.fullmatch(
+        r"(?:rename|change)\s+(?:(?:the|this)\s+)?(?:chat|project)\s+"
+        r"(?!name\b)([a-zA-Z0-9_-]+)\s+(?:to|as)\s+(.+)",
+        raw,
+        re.I | re.S,
+    )
+    if rename_name or rename_id:
+        if rename_name:
+            project = (rename_name.group(1) or "").strip()
+            new_name = rename_name.group(2).strip().strip("'\"")
+            if not project and sender:
+                try:
+                    from orchestrator import session
+
+                    project = (
+                        session.get(sender).get("active_project") or ""
+                    ).strip()
+                except Exception:  # noqa: BLE001
+                    project = ""
+        else:
+            project = rename_id.group(1).strip()
+            new_name = rename_id.group(2).strip().strip("'\"")
+        if new_name:
+            return Intent(
+                kind="update_project",
+                project=project,
+                updates={"display_name": new_name},
+                raw=raw,
+            )
+
     # "Do we have lifeos project?" / "is there a kv-hrms project?"
     project_ask = find_project_in_text(raw, registry)
     if project_ask and re.search(

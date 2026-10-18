@@ -456,3 +456,17 @@ def test_chat_page_includes_manage_projects_ui(tmp_path, monkeypatch):
     drawer_idx = html.index('id="manageDrawer"')
     status_idx = html.index('id="statusProjects"')
     assert manage_btn_idx < status_idx < drawer_idx
+
+
+def test_chat_page_includes_rename_chat_ui(tmp_path, monkeypatch):
+    client = _client(monkeypatch, tmp_path)
+    _login(client)
+    html = client.get("/chat").text
+    assert 'id="chatTitle"' in html
+    assert 'id="renameChatBtn"' in html
+    assert 'id="renameChatModal"' in html
+    assert 'id="renameChatInput"' in html
+    assert "openRenameChat" in html
+    assert "saveRenameChat" in html
+    assert "display_name" in html
+    assert "Rename chat" in html
