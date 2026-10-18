@@ -132,17 +132,43 @@ def execute_task(task_id: str, *, job_id: int | None = None, fence: str | None =
         if _cancelled(task_id):
             return
 
+        from orchestrator import attachments as chat_attachments
+
+        attach_paths: list[str] = []
+        try:
+            attach_paths = chat_attachments.materialize_into_workspace(
+                target, task.get("attachments")
+            )
+        except ValueError as exc:
+            task_events.record(
+                task_id,
+                "attachments_rejected",
+                f"Attachment rejected: {exc}",
+                stage="preparing_workspace",
+            )
+            attach_paths = []
+        if attach_paths:
+            task_events.record(
+                task_id,
+                "attachments_ready",
+                f"Copied {len(attach_paths)} image attachment(s) into workspace for agent context",
+                stage="preparing_workspace",
+                detail={"paths": attach_paths},
+            )
+
+        # Snapshot after attachments so copied images are not reported as agent edits.
+        before_snapshot = workspace.file_snapshot(target) if not branch else None
+
         prompt = agent.build_prompt(
             task["instruction"],
             project_instructions=str(project_config.get("instructions") or ""),
+            attachment_paths=attach_paths,
         )
         if reuse_workspace:
             prompt = (
                 "FOLLOW-UP TURN (continue prior agent session in this workspace):\n"
                 + prompt
             )
-
-        before_snapshot = workspace.file_snapshot(target) if not branch else None
 
         if config.DRY_RUN:
             task_events.record(

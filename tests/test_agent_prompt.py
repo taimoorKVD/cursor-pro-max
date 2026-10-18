@@ -12,6 +12,15 @@ def test_build_prompt_leads_with_task():
     assert "CONSTRAINTS" in prompt
 
 
+def test_build_prompt_includes_attachment_paths():
+    prompt = build_prompt(
+        "fix the button spacing on this screen",
+        attachment_paths=[".orchestrator-attachments/ui.png"],
+    )
+    assert "ATTACHED IMAGES" in prompt
+    assert ".orchestrator-attachments/ui.png" in prompt
+
+
 def test_build_argv_uses_short_pointer(tmp_path, monkeypatch):
     monkeypatch.setattr(
         "orchestrator.agent.resolve_agent_argv",

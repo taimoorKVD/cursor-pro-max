@@ -49,6 +49,7 @@ def initialize() -> None:
         _ensure_column(c, "tasks", "revision", "INTEGER")
         _ensure_column(c, "tasks", "approved_sha", "TEXT")
         _ensure_column(c, "tasks", "agent_chat_id", "TEXT")
+        _ensure_column(c, "tasks", "attachments", "TEXT")
         c.execute("CREATE TABLE IF NOT EXISTS incoming (message_id TEXT PRIMARY KEY)")
         c.execute(
             """CREATE TABLE IF NOT EXISTS jobs (
@@ -70,6 +71,7 @@ def initialize() -> None:
         c.execute(
             "CREATE INDEX IF NOT EXISTS idx_jobs_claim ON jobs(status, available_at, id)"
         )
+        from orchestrator.attachments import ensure_schema as ensure_attachments_schema
         from orchestrator.audit import ensure_schema
         from orchestrator.history import ensure_schema as ensure_history_schema
         from orchestrator.session import ensure_schema as ensure_session_schema
@@ -81,6 +83,7 @@ def initialize() -> None:
         ensure_session_schema(c)
         ensure_events_schema(c)
         ensure_history_schema(c)
+        ensure_attachments_schema(c)
 
 
 def _ensure_column(conn: sqlite3.Connection, table: str, column: str, ddl_type: str) -> None:

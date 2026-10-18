@@ -32,6 +32,7 @@ Phone browser → https://<tunnel>/chat → Cloudflare tunnel → FastAPI on the
 4. Hard-refresh the page after deploys (`Ctrl+F5` / pull-to-refresh) so you get the latest UI.
 5. Log in. A welcome message and status pill show agent/DRY_RUN health.
 6. Commands: `PROJECTS`, `TASKS`, `HELP`, `TASK project: ...`, `STATUS <task_id>`, `APPROVE <id> PUSH`, `REJECT <id>`.
+7. Images: use the paperclip, paste a screenshot, or drag-and-drop onto the composer (PNG/JPEG/WebP/GIF, up to 5 per message, 8 MB each). Attached images are shown in the thread and, when a coding task starts, copied into the isolated workspace and referenced in the Cursor agent prompt (same idea as Cursor chat image attachments).
 
 ### Install on iPhone (Home Screen app)
 

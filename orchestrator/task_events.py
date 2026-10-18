@@ -148,7 +148,16 @@ def completed_and_remaining(stage: str | None, status: str) -> tuple[list[str], 
     """Return (completed labels, remaining labels, current label) from recorded stage."""
     if status == "failed":
         return ([], [], STAGE_LABELS.get(stage or "failed", "Failed"))
-    if status in {"review", "publishing", "published", "publish_failed", "rejected"}:
+    if status == "published":
+        done = [STAGE_LABELS[s] for s in PIPELINE]
+        return (done, [], "Published — applied to your project")
+    if status == "publish_failed":
+        done = [STAGE_LABELS[s] for s in PIPELINE]
+        return (done, [], "Publish failed — needs attention")
+    if status == "rejected":
+        done = [STAGE_LABELS[s] for s in PIPELINE]
+        return (done, [], "Rejected")
+    if status in {"review", "publishing"}:
         done = [STAGE_LABELS[s] for s in PIPELINE]
         return (done, [], STAGE_LABELS["ready_for_review"])
 

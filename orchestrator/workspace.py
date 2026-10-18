@@ -21,6 +21,7 @@ _SKIP_DIR_NAMES = {
     "__pycache__",
     "public/build",
     "storage",
+    ".orchestrator-attachments",
 }
 _SKIP_FILE_NAMES = {".orchestrator-task.md", ".env"}
 

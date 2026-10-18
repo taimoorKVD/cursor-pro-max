@@ -303,7 +303,19 @@ def parse_intent(text: str, registry: dict[str, Any], sender: str = "") -> Inten
         if project or lowered in {n.lower() for n in registry}:
             if not project:
                 project = next(n for n in registry if n.lower() == lowered)
+            attach_ids = [
+                str(a).strip()
+                for a in (pending.get("attachment_ids") or [])
+                if str(a).strip()
+            ]
             clear_pending(sender)
+            if attach_ids:
+                try:
+                    from orchestrator import attachments as chat_attachments
+
+                    chat_attachments.set_pending(sender, attach_ids)
+                except Exception:  # noqa: BLE001
+                    pass
             return Intent(
                 kind="task",
                 project=project,

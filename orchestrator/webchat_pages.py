@@ -555,8 +555,10 @@ CHAT_HTML = _CHAT_HEAD + r"""
   <button type="button" class="chip-btn" data-send="what can you do?">Help</button>
 </div>
 <div id="composer" class="shrink-0 px-[max(12px,env(safe-area-inset-right,0px))] pt-1 pb-[max(12px,env(safe-area-inset-bottom,0px))] pl-[max(12px,env(safe-area-inset-left,0px))] min-[900px]:px-8">
+<input type="file" id="attachInput" accept="image/png,image/jpeg,image/webp,image/gif,image/*" multiple hidden>
+<div id="attachPreview" class="mb-1.5 hidden flex-wrap gap-1.5 px-1" aria-live="polite"></div>
 <form id="f" class="flex items-end gap-1.5 rounded-full border border-line bg-white py-1.5 pr-1.5 pl-2 shadow-[0_10px_30px_rgba(18,32,28,.07)] transition focus-within:border-accent/40 focus-within:shadow-[0_12px_34px_rgba(0,104,74,.12)]">
-  <button type="button" id="attachBtn" title="Attach" aria-label="Attach" class="grid size-10 shrink-0 cursor-pointer place-items-center rounded-full border-0 bg-transparent text-muted transition hover:bg-accent-soft hover:text-accent">
+  <button type="button" id="attachBtn" title="Attach image" aria-label="Attach image" class="grid size-10 shrink-0 cursor-pointer place-items-center rounded-full border-0 bg-transparent text-muted transition hover:bg-accent-soft hover:text-accent">
     <svg class="size-[18px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m15.5 8.5-6.2 6.2a2.2 2.2 0 0 0 3.1 3.1l7.4-7.4a3.8 3.8 0 0 0-5.4-5.4L7 12.4a5.4 5.4 0 0 0 7.6 7.6l5.5-5.5"/></svg>
   </button>
   <textarea id="txt" rows="1" class="max-h-[96px] flex-1 resize-none border-0 bg-transparent py-2.5 text-[15px] leading-[1.35] text-ink outline-none placeholder:text-[#8a9a93]" placeholder="Message like ChatGPT — e.g. on my-project, improve form validation" autocomplete="off" autocorrect="on" autocapitalize="sentences" spellcheck="true" inputmode="text" enterkeyhint="send"></textarea>
@@ -643,6 +645,9 @@ const SIDEBAR_COLLAPSED_KEY = 'orch-sidebar-collapsed';
 const desktopSidebarMq = window.matchMedia('(min-width: 900px)');
 let last = 0;
 let sending = false;
+const MAX_ATTACH = 5;
+let pendingAttachments = [];
+function renderAttachPreview() {}
 let pollBusy = false;
 let toastTimer = null;
 let bootstrapped = false;
@@ -1327,10 +1332,36 @@ function add(m, {notify=false} = {}) {
     badge.appendChild(label);
     bubble.appendChild(badge);
   }
-  const body = document.createElement('div');
-  body.className = 'msg-bubble-text';
-  body.textContent = m.text;
-  bubble.appendChild(body);
+  const atts = Array.isArray(m.attachments) ? m.attachments : [];
+  if (atts.length) {
+    const gallery = document.createElement('div');
+    gallery.className = 'msg-attach-gallery';
+    gallery.style.cssText = 'display:flex;flex-wrap:wrap;gap:6px;margin:' + (m.text && m.text !== '[Image attached]' ? '0 0 8px' : '0') + ';';
+    atts.forEach((a) => {
+      const href = a.url || ('/chat/attachments/' + a.id);
+      const link = document.createElement('a');
+      link.href = href;
+      link.target = '_blank';
+      link.rel = 'noopener';
+      link.title = a.filename || 'Image';
+      link.style.cssText = 'display:block;border-radius:12px;overflow:hidden;max-width:min(240px,70vw);line-height:0;';
+      const img = document.createElement('img');
+      img.src = href;
+      img.alt = a.filename || 'Attached image';
+      img.loading = 'lazy';
+      img.style.cssText = 'display:block;width:100%;height:auto;max-height:220px;object-fit:cover;background:rgba(0,0,0,.06);';
+      link.appendChild(img);
+      gallery.appendChild(link);
+    });
+    bubble.appendChild(gallery);
+  }
+  const showText = (m.text || '') && !(atts.length && m.text === '[Image attached]');
+  if (showText) {
+    const body = document.createElement('div');
+    body.className = 'msg-bubble-text';
+    body.textContent = m.text;
+    bubble.appendChild(body);
+  }
   col.appendChild(meta);
   col.appendChild(bubble);
   if (!incoming) {
@@ -1554,15 +1585,23 @@ function pipelineKey(stage) {
 }
 function renderRail(stage, status) {
   if (!progressRail) return;
-  const key = status === 'review' || status === 'publishing' || status === 'published'
+  // Terminal statuses: fill every segment, no sweeping "current" loader.
+  const terminalDone = status === 'published' || status === 'rejected' || status === 'publish_failed';
+  const key = (status === 'review' || status === 'publishing')
     ? 'ready_for_review'
     : pipelineKey(stage);
-  const idx = Math.max(0, PIPELINE_STEPS.findIndex(s => s.key === key));
-  const next = PIPELINE_STEPS.map((step, i) =>
-    '<span class="work-rail-seg' + (i < idx ? ' done' : (i === idx ? ' current' : '')) + '" title="' + step.short + '"></span>'
-  ).join('');
-  if (progressRail.dataset.sig === String(idx)) return;
-  progressRail.dataset.sig = String(idx);
+  const idx = terminalDone
+    ? PIPELINE_STEPS.length
+    : Math.max(0, PIPELINE_STEPS.findIndex(s => s.key === key));
+  const sig = terminalDone ? ('done:' + status) : String(idx);
+  const next = PIPELINE_STEPS.map((step, i) => {
+    let cls = 'work-rail-seg';
+    if (terminalDone || i < idx) cls += ' done';
+    else if (i === idx) cls += ' current';
+    return '<span class="' + cls + '" title="' + step.short + '"></span>';
+  }).join('');
+  if (progressRail.dataset.sig === sig) return;
+  progressRail.dataset.sig = sig;
   progressRail.innerHTML = next;
 }
 function shortPath(raw) {
@@ -1773,6 +1812,7 @@ async function refreshProgress() {
     const label = t.current_label || t.execution_stage || 'Working';
     const active = t.status === 'queued' || t.status === 'running' || t.status === 'publishing';
     const needsReview = t.status === 'review';
+    const isPublished = t.status === 'published';
     const latestMsg = feed.length ? (feed[feed.length - 1].message || '') : '';
     const headSig = [t.task_id, t.status, t.execution_stage, label, latestMsg, _inflightCount].join('|');
     const taskChanged = _lastProgressSig.split('|')[0] !== String(t.task_id || '');
@@ -1787,15 +1827,17 @@ async function refreshProgress() {
     setElapsedClock(t.started_at, active);
     if (headSig !== _lastProgressSig) {
       _lastProgressSig = headSig;
-      progressStageLabel.textContent = needsReview
-        ? 'Ready for your approval'
-        : label;
+      progressStageLabel.textContent = isPublished
+        ? 'Published'
+        : (needsReview ? 'Ready for your approval' : label);
       const latest = formatActivity(latestMsg || stageHint(t.execution_stage, t.status));
-      progressNow.innerHTML = needsReview
-        ? 'Coding finished — tap Approve &amp; apply below (project folder unchanged until then).'
-        : (latest.path
-          ? (latest.label ? (escapeHtml(latest.label) + ' · <code>' + escapeHtml(latest.path) + '</code>') : ('<code>' + escapeHtml(latest.path) + '</code>'))
-          : escapeHtml(latest.label || stageHint(t.execution_stage, t.status)));
+      progressNow.innerHTML = isPublished
+        ? 'Done — changes are in your project folder. Nothing left to approve.'
+        : (needsReview
+          ? 'Coding finished — tap Approve &amp; apply below (project folder unchanged until then).'
+          : (latest.path
+            ? (latest.label ? (escapeHtml(latest.label) + ' · <code>' + escapeHtml(latest.path) + '</code>') : ('<code>' + escapeHtml(latest.path) + '</code>'))
+            : escapeHtml(latest.label || stageHint(t.execution_stage, t.status))));
       if (progressMeta) {
         let meta = (t.project || '') + (t.task_id ? (' · ' + t.task_id) : '');
         if (_inflightCount > 1) meta += ' · ' + _inflightCount + ' live';
@@ -1827,6 +1869,8 @@ function setReviewBanner(on, mode) {
   if (bannerPushBtn) bannerPushBtn.hidden = false;
 }
 function stageHint(stage, status) {
+  if (status === 'published') return 'Published — applied to your project';
+  if (status === 'publish_failed') return 'Publish failed — needs attention';
   if (status === 'review') return 'Ready for your review';
   if (stage === 'investigating') return 'Reading and searching files';
   if (stage === 'implementing') return 'Writing and editing files';
@@ -1889,16 +1933,26 @@ async function refreshStatus() {
       t.status === 'queued' || t.status === 'running' || t.status === 'publishing'
     );
     const reviewScoped = nextCache.filter(t => t.status === 'review');
-    const publishFailedScoped = nextCache.filter(t => t.status === 'publish_failed');
+    // Hide stale publish_failed when a newer published task exists for the same project
+    // (recent_tasks are newest-first).
+    const publishFailedScoped = nextCache.filter((t, idx) => {
+      if (t.status !== 'publish_failed') return false;
+      return !nextCache.slice(0, idx).some(
+        (o) => o.project === t.project && o.status === 'published'
+      );
+    });
     _inflightCount = (typeof j.inflight_count === 'number')
       ? j.inflight_count
       : liveScoped.length;
-    // Prefer selected task for the approval banner; else newest review / failed publish.
+    // Prefer selected actionable task; else newest review / failed publish (not published).
     let reviewTask = null;
     if (_selectedTaskId) {
-      reviewTask = reviewScoped.find(t => t.id === _selectedTaskId)
-        || publishFailedScoped.find(t => t.id === _selectedTaskId)
-        || null;
+      const selected = nextCache.find(t => t.id === _selectedTaskId);
+      if (selected && (selected.status === 'review' || selected.status === 'publish_failed')) {
+        const stillActionable = selected.status === 'review'
+          || publishFailedScoped.some(t => t.id === selected.id);
+        if (stillActionable) reviewTask = selected;
+      }
     }
     if (!reviewTask && reviewScoped.length) reviewTask = reviewScoped[0];
     if (!reviewTask && publishFailedScoped.length) reviewTask = publishFailedScoped[0];
@@ -2031,19 +2085,25 @@ function autoSize() {
 }
 
 async function send(text) {
-  text = text.trim();
-  if (!text || sending) return;
+  text = (text || '').trim();
+  const attachIds = pendingAttachments.map((a) => a.id);
+  if ((!text && !attachIds.length) || sending) return;
   sending = true;
   sendBtn.disabled = true;
   busy.classList.add('on');
   txt.value = '';
   autoSize();
+  const sentAttach = pendingAttachments.slice();
+  pendingAttachments = [];
+  renderAttachPreview();
   try {
     const r = await fetch('/chat/send', {method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({text, cid: crypto.randomUUID()})});
+      body: JSON.stringify({text, attachments: attachIds, cid: crypto.randomUUID()})});
     if (!r.ok) {
       const j = await r.json().catch(() => ({}));
       showToast(j.error || ('Send failed: ' + r.status));
+      pendingAttachments = sentAttach.concat(pendingAttachments).slice(0, MAX_ATTACH);
+      renderAttachPreview();
     }
     await poll();
     await refreshStatus();
@@ -2255,7 +2315,130 @@ if (projectsRootInput) {
 }
 projectSearch.addEventListener('input', () => renderProjects(projectSearch.value));
 document.getElementById('newChat').addEventListener('click', () => { setSidebarOpen(false); doClearChat(); });
-document.getElementById('attachBtn').addEventListener('click', () => showToast('Attachments coming soon'));
+(function setupImageAttachments() {
+  const attachBtn = document.getElementById('attachBtn');
+  const attachInput = document.getElementById('attachInput');
+  const attachPreview = document.getElementById('attachPreview');
+  const composer = document.getElementById('composer');
+  const formEl = document.getElementById('f');
+  if (!attachBtn || !attachInput || !attachPreview) return;
+
+  renderAttachPreview = function() {
+    attachPreview.innerHTML = '';
+    if (!pendingAttachments.length) {
+      attachPreview.classList.add('hidden');
+      attachPreview.classList.remove('flex');
+      return;
+    }
+    attachPreview.classList.remove('hidden');
+    attachPreview.classList.add('flex');
+    pendingAttachments.forEach((a, idx) => {
+      const chip = document.createElement('div');
+      chip.style.cssText = 'position:relative;width:64px;height:64px;border-radius:12px;overflow:hidden;border:1px solid var(--line);background:var(--chip);flex-shrink:0;';
+      const img = document.createElement('img');
+      img.src = a.url;
+      img.alt = a.filename || 'Image';
+      img.style.cssText = 'width:100%;height:100%;object-fit:cover;display:block;';
+      const rm = document.createElement('button');
+      rm.type = 'button';
+      rm.title = 'Remove';
+      rm.setAttribute('aria-label', 'Remove attachment');
+      rm.textContent = '×';
+      rm.style.cssText = 'position:absolute;top:2px;right:2px;width:20px;height:20px;border:0;border-radius:999px;background:rgba(18,32,28,.75);color:#fff;font-size:14px;line-height:1;cursor:pointer;padding:0;';
+      rm.addEventListener('click', () => {
+        pendingAttachments.splice(idx, 1);
+        renderAttachPreview();
+      });
+      chip.appendChild(img);
+      chip.appendChild(rm);
+      attachPreview.appendChild(chip);
+    });
+  };
+
+  async function uploadFiles(fileList) {
+    const files = Array.from(fileList || []).filter((f) => f && /^image\//i.test(f.type || ''));
+    if (!files.length) {
+      showToast('Only image files can be attached');
+      return;
+    }
+    const room = MAX_ATTACH - pendingAttachments.length;
+    if (room <= 0) {
+      showToast('Max ' + MAX_ATTACH + ' images per message');
+      return;
+    }
+    const batch = files.slice(0, room);
+    for (const file of batch) {
+      if (file.size > 8 * 1024 * 1024) {
+        showToast('Image too large (max 8 MB)');
+        continue;
+      }
+      const fd = new FormData();
+      fd.append('image', file, file.name || 'image.png');
+      try {
+        const r = await fetch('/chat/attach', {method: 'POST', body: fd});
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok) {
+          showToast(j.error || ('Upload failed: ' + r.status));
+          continue;
+        }
+        pendingAttachments.push({
+          id: j.id,
+          filename: j.filename || file.name || 'image',
+          content_type: j.content_type || file.type,
+          size: j.size || file.size,
+          url: j.url || ('/chat/attachments/' + j.id),
+        });
+        renderAttachPreview();
+      } catch (e) {
+        showToast('Upload failed');
+      }
+    }
+    if (files.length > room) showToast('Max ' + MAX_ATTACH + ' images per message');
+  }
+
+  attachBtn.addEventListener('click', () => attachInput.click());
+  attachInput.addEventListener('change', () => {
+    uploadFiles(attachInput.files);
+    attachInput.value = '';
+  });
+
+  txt.addEventListener('paste', (e) => {
+    const items = e.clipboardData && e.clipboardData.items;
+    if (!items) return;
+    const files = [];
+    for (const it of items) {
+      if (it.type && it.type.indexOf('image/') === 0) {
+        const f = it.getAsFile();
+        if (f) files.push(f);
+      }
+    }
+    if (!files.length) return;
+    e.preventDefault();
+    uploadFiles(files);
+  });
+
+  function onDrag(e) {
+    e.preventDefault();
+    e.stopPropagation();
+  }
+  [composer, formEl, log].forEach((el) => {
+    if (!el) return;
+    el.addEventListener('dragover', (e) => {
+      onDrag(e);
+      if (formEl) formEl.style.borderColor = 'var(--accent)';
+    });
+    el.addEventListener('dragleave', (e) => {
+      onDrag(e);
+      if (formEl) formEl.style.borderColor = '';
+    });
+    el.addEventListener('drop', (e) => {
+      onDrag(e);
+      if (formEl) formEl.style.borderColor = '';
+      const dt = e.dataTransfer;
+      if (dt && dt.files && dt.files.length) uploadFiles(dt.files);
+    });
+  });
+})();
 (function setupVoiceInput() {
   const micBtn = document.getElementById('micBtn');
   if (!micBtn) return;

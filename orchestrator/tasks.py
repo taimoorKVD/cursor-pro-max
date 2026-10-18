@@ -29,6 +29,7 @@ _TASK_COLUMNS = frozenset(
         "revision",
         "approved_sha",
         "agent_chat_id",
+        "attachments",
     }
 )
 
@@ -39,15 +40,40 @@ def get_task(task_id: str) -> dict[str, Any] | None:
         return dict(row) if row else None
 
 
-def create_task(task_id: str, sender: str, project: str, instruction: str) -> None:
+def create_task(
+    task_id: str,
+    sender: str,
+    project: str,
+    instruction: str,
+    *,
+    attachments: list[str] | None = None,
+) -> None:
     now = db.now()
+    attach_json = None
+    if attachments:
+        attach_json = json.dumps(
+            [str(a).strip() for a in attachments if str(a).strip()],
+            ensure_ascii=False,
+        )
     with db.DB_LOCK, db.connect() as c:
         c.execute(
             """INSERT INTO tasks
             (id,sender,project,instruction,status,execution_stage,revision,
-             created_at,updated_at,last_activity_at)
-            VALUES (?,?,?,?,?,?,?,?,?,?)""",
-            (task_id, sender, project, instruction, "queued", "queued", 1, now, now, now),
+             created_at,updated_at,last_activity_at,attachments)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                task_id,
+                sender,
+                project,
+                instruction,
+                "queued",
+                "queued",
+                1,
+                now,
+                now,
+                now,
+                attach_json,
+            ),
         )
 
 
@@ -64,6 +90,8 @@ def update_task(task_id: str, **fields: Any) -> None:
     fields = dict(fields)
     if "modified_files" in fields and not isinstance(fields["modified_files"], str):
         fields["modified_files"] = json.dumps(fields["modified_files"], ensure_ascii=False)
+    if "attachments" in fields and not isinstance(fields["attachments"], str):
+        fields["attachments"] = json.dumps(fields["attachments"], ensure_ascii=False)
     fields["updated_at"] = db.now()
     if "last_activity_at" not in fields:
         fields["last_activity_at"] = fields["updated_at"]
@@ -87,6 +115,8 @@ def cas_update(task_id: str, expect_status: str, **fields: Any) -> bool:
     fields = dict(fields)
     if "modified_files" in fields and not isinstance(fields["modified_files"], str):
         fields["modified_files"] = json.dumps(fields["modified_files"], ensure_ascii=False)
+    if "attachments" in fields and not isinstance(fields["attachments"], str):
+        fields["attachments"] = json.dumps(fields["attachments"], ensure_ascii=False)
     fields["updated_at"] = db.now()
     if "last_activity_at" not in fields:
         fields["last_activity_at"] = fields["updated_at"]

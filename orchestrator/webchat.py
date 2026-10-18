@@ -15,9 +15,10 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Request
-from fastapi.responses import HTMLResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from starlette.concurrency import run_in_threadpool
 
+from orchestrator import attachments as chat_attachments
 from orchestrator import audit, config, db
 from orchestrator.webchat_pages import (
     CHAT_HTML,
@@ -37,6 +38,7 @@ MAX_FAILURES = 5
 LOCKOUT_SEC = 900
 MIN_PASSWORD_LEN = 12
 HISTORY_LIMIT = 200
+IMAGE_ONLY_PLACEHOLDER = "[Image attached]"
 _VOICE_EXTS = {
     "audio/webm": ".webm",
     "audio/mp4": ".mp4",
@@ -75,9 +77,12 @@ def ensure_schema(conn) -> None:
         conn.execute("ALTER TABLE web_messages ADD COLUMN level TEXT NOT NULL DEFAULT 'info'")
     if "project" not in cols:
         conn.execute("ALTER TABLE web_messages ADD COLUMN project TEXT")
+    if "attachments" not in cols:
+        conn.execute("ALTER TABLE web_messages ADD COLUMN attachments TEXT")
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_web_messages_project ON web_messages(project, id)"
     )
+    chat_attachments.ensure_schema(conn)
 
 
 def _current_project() -> str | None:
@@ -97,6 +102,7 @@ def store(
     level: str = "info",
     mirror_history: bool = True,
     project: str | None = None,
+    attachments: list[dict[str, Any]] | None = None,
 ) -> None:
     from orchestrator.notify import infer_level
 
@@ -105,20 +111,39 @@ def store(
         kind = "info"
     if project is None:
         project = _current_project()
+    attach_json = (
+        chat_attachments.serialize_for_message(attachments) if attachments else None
+    )
     with db.DB_LOCK, db.connect() as c:
         ensure_schema(c)
         c.execute(
-            "INSERT INTO web_messages (ts, direction, text, level, project) VALUES (?, ?, ?, ?, ?)",
-            (db.now(), direction, text, kind, project),
+            "INSERT INTO web_messages (ts, direction, text, level, project, attachments) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (db.now(), direction, text, kind, project, attach_json),
         )
     # Keep shared conversation history in sync for Groq / follow-ups.
     if mirror_history:
         try:
             from orchestrator import history
 
-            history.append(SENDER, direction, text, level=kind, project=project)
+            history_text = text
+            if attachments:
+                names = ", ".join(
+                    str(a.get("filename") or "image") for a in attachments[:5]
+                )
+                history_text = f"{text}\n[attachments: {names}]".strip()
+            history.append(SENDER, direction, history_text, level=kind, project=project)
         except Exception:  # noqa: BLE001
             pass
+
+
+def _row_message(row) -> dict[str, Any]:
+    item = dict(row)
+    item["level"] = item.get("level") or "info"
+    item["attachments"] = chat_attachments.deserialize_message_attachments(
+        item.pop("attachments", None)
+    )
+    return item
 
 
 def messages_after(after_id: int, *, project: str | None = None) -> list[dict[str, Any]]:
@@ -128,37 +153,36 @@ def messages_after(after_id: int, *, project: str | None = None) -> list[dict[st
         if project:
             if after_id <= 0:
                 rows = c.execute(
-                    """SELECT id, ts, direction, text, level, project FROM web_messages
+                    """SELECT id, ts, direction, text, level, project, attachments
+                       FROM web_messages
                        WHERE project=? ORDER BY id DESC LIMIT ?""",
                     (project, HISTORY_LIMIT),
                 ).fetchall()
                 rows = list(reversed(rows))
             else:
                 rows = c.execute(
-                    """SELECT id, ts, direction, text, level, project FROM web_messages
+                    """SELECT id, ts, direction, text, level, project, attachments
+                       FROM web_messages
                        WHERE project=? AND id > ? ORDER BY id LIMIT ?""",
                     (project, after_id, HISTORY_LIMIT),
                 ).fetchall()
         else:
             if after_id <= 0:
                 rows = c.execute(
-                    """SELECT id, ts, direction, text, level, project FROM web_messages
+                    """SELECT id, ts, direction, text, level, project, attachments
+                       FROM web_messages
                        ORDER BY id DESC LIMIT ?""",
                     (HISTORY_LIMIT,),
                 ).fetchall()
                 rows = list(reversed(rows))
             else:
                 rows = c.execute(
-                    """SELECT id, ts, direction, text, level, project FROM web_messages
+                    """SELECT id, ts, direction, text, level, project, attachments
+                       FROM web_messages
                        WHERE id > ? ORDER BY id LIMIT ?""",
                     (after_id, HISTORY_LIMIT),
                 ).fetchall()
-    out = []
-    for r in rows:
-        item = dict(r)
-        item["level"] = item.get("level") or "info"
-        out.append(item)
-    return out
+    return [_row_message(r) for r in rows]
 
 
 def recent_messages(limit: int = 16, *, project: str | None = None) -> list[dict[str, Any]]:
@@ -170,16 +194,18 @@ def recent_messages(limit: int = 16, *, project: str | None = None) -> list[dict
         ensure_schema(c)
         if project:
             rows = c.execute(
-                """SELECT id, ts, direction, text, level, project FROM web_messages
+                """SELECT id, ts, direction, text, level, project, attachments
+                   FROM web_messages
                    WHERE project=? ORDER BY id DESC LIMIT ?""",
                 (project, limit),
             ).fetchall()
         else:
             rows = c.execute(
-                "SELECT id, ts, direction, text, level, project FROM web_messages ORDER BY id DESC LIMIT ?",
+                """SELECT id, ts, direction, text, level, project, attachments
+                   FROM web_messages ORDER BY id DESC LIMIT ?""",
                 (limit,),
             ).fetchall()
-    return [dict(r) for r in reversed(list(rows))]
+    return [_row_message(r) for r in reversed(list(rows))]
 
 
 def clear_messages(*, project: str | None = None) -> None:
@@ -522,8 +548,14 @@ async def send(request: Request) -> JSONResponse:
         return _json({"error": "Bad request"}, 400)
     text = str(data.get("text", "")).strip()
     cid = str(data.get("cid", ""))[:64]
-    if not text:
+    attach_ids = chat_attachments.parse_ids(data.get("attachments"))
+    metas = chat_attachments.resolve_owned(attach_ids, SENDER) if attach_ids else []
+    if attach_ids and len(metas) != len(attach_ids):
+        return _json({"error": "One or more attachments are missing or expired"}, 400)
+    if not text and not metas:
         return _json({"error": "Empty message"}, 400)
+    if not text and metas:
+        text = IMAGE_ONLY_PLACEHOLDER
     if len(text) > MAX_TEXT:
         return _json({"error": f"Message too long (max {MAX_TEXT} chars)"}, 413)
 
@@ -532,9 +564,69 @@ async def send(request: Request) -> JSONResponse:
 
     if cid and not seen_message(f"web:{cid}"):
         return _json({"ok": True, "duplicate": True})
-    store("in", text)
+    store("in", text, attachments=metas or None)
+    if metas:
+        chat_attachments.set_pending(SENDER, [m["id"] for m in metas])
     await run_in_threadpool(handle, SENDER, text)
-    return _json({"ok": True})
+    return _json({"ok": True, "attachments": len(metas)})
+
+
+@router.post("/chat/attach")
+async def attach(request: Request) -> JSONResponse:
+    """Upload an image for the next chat message (Cursor-style attachment)."""
+    if not _authed(request):
+        return _json({"error": "Unauthorized"}, 401)
+    ctype = (request.headers.get("content-type") or "").lower()
+    if "multipart/form-data" not in ctype:
+        return _json({"error": "Expected multipart image upload"}, 400)
+    try:
+        form = await request.form()
+    except Exception:  # noqa: BLE001
+        return _json({"error": "Bad upload"}, 400)
+    upload = form.get("image") or form.get("file") or form.get("attachment")
+    if upload is None:
+        return _json({"error": "Missing image"}, 400)
+    raw = await upload.read() if hasattr(upload, "read") else b""
+    if not raw:
+        return _json({"error": "Empty image"}, 400)
+    if len(raw) > chat_attachments.MAX_IMAGE_BYTES:
+        return _json({"error": "Image too large (max 8 MB)"}, 413)
+    raw_ctype = str(getattr(upload, "content_type", "") or "")
+    filename = Path(str(getattr(upload, "filename", None) or "image")).name or "image"
+    try:
+        meta = await run_in_threadpool(
+            chat_attachments.save_upload,
+            SENDER,
+            raw,
+            filename=filename,
+            content_type=raw_ctype,
+        )
+    except ValueError as exc:
+        return _json({"error": str(exc) or "Invalid image"}, 422)
+    except Exception as exc:  # noqa: BLE001
+        return _json({"error": f"Upload failed: {exc}"}, 500)
+    audit.record(
+        "webchat_attach",
+        actor=_client_ip(request),
+        detail={"id": meta["id"], "bytes": meta["size"], "type": meta["content_type"]},
+    )
+    return _json({"ok": True, **meta})
+
+
+@router.get("/chat/attachments/{attach_id}")
+def get_attachment_file(request: Request, attach_id: str) -> Response:
+    if not _authed(request):
+        return _json({"error": "Unauthorized"}, 401)
+    meta = chat_attachments.get_attachment(attach_id, sender=SENDER)
+    if not meta:
+        return _json({"error": "Not found"}, 404)
+    path = Path(meta["path"])
+    return FileResponse(
+        path,
+        media_type=str(meta.get("content_type") or "application/octet-stream"),
+        filename=str(meta.get("filename") or "image"),
+        headers={"Cache-Control": "private, max-age=3600"},
+    )
 
 
 @router.post("/chat/voice")

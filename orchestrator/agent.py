@@ -320,8 +320,17 @@ def ensure_auth(*, force_login: bool = False) -> tuple[bool, str]:
     )
 
 
-def build_prompt(instruction: str, *, project_instructions: str = "") -> str:
-    """Lead with the real user task so the model cannot miss it."""
+def build_prompt(
+    instruction: str,
+    *,
+    project_instructions: str = "",
+    attachment_paths: list[str] | None = None,
+) -> str:
+    """Lead with the real user task so the model cannot miss it.
+
+    ``attachment_paths`` are workspace-relative image paths (Cursor CLI can
+    inspect image files referenced in the prompt).
+    """
     task = (instruction or "").strip()
     task = re.sub(
         r"^(yes|yeah|yep|sure|ok|okay|please|do it|go ahead)[,!.\s\-]*",
@@ -345,6 +354,13 @@ def build_prompt(instruction: str, *, project_instructions: str = "") -> str:
     ]
     if project_instructions.strip():
         parts.extend(["", "PROJECT NOTES:", project_instructions.strip()])
+    paths = [p.strip().replace("\\", "/") for p in (attachment_paths or []) if p and str(p).strip()]
+    if paths:
+        from orchestrator.attachments import prompt_section
+
+        section = prompt_section(paths)
+        if section:
+            parts.extend(["", section])
     return "\n".join(parts)
 
 

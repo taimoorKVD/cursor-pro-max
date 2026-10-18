@@ -159,11 +159,60 @@ def _resolve_task(sender: str, task_id: str | None) -> dict | None:
         task = tasks.get_task(str(ctx["active_task_id"]))
         if task and task["sender"] == sender:
             if not active_project or task.get("project") == active_project:
+                # Prefer in-flight/review work when the session still points at a
+                # finished/published run (common right after Approve succeeds).
+                if task.get("status") in {"published", "rejected", "failed"}:
+                    actionable = tasks.active_task_for_sender(
+                        sender, project=active_project
+                    )
+                    if actionable:
+                        return actionable
                 return task
-    return tasks.active_task_for_sender(sender, project=active_project)
+    actionable = tasks.active_task_for_sender(sender, project=active_project)
+    if actionable:
+        return actionable
+    return _latest_publish_failed(sender, active_project)
 
 
-def _start_task(sender: str, project: str, instruction: str) -> None:
+def _latest_publish_failed(sender: str, project: str | None) -> dict | None:
+    """Newest publish_failed that is not superseded by a later published task."""
+    rows = tasks.list_tasks_for_sender(sender, limit=40)
+    seen_published: set[str] = set()
+    for row in rows:
+        proj = str(row.get("project") or "")
+        if project and proj != project:
+            continue
+        status = row.get("status") or ""
+        if status == "published":
+            seen_published.add(proj)
+            continue
+        if status == "publish_failed" and proj not in seen_published:
+            return row
+    return None
+
+
+def _claim_attachments_for_task(sender: str) -> list[str]:
+    """Take staged image ids for this turn, including those stashed on need_project."""
+    from orchestrator import attachments as chat_attachments
+
+    ids = chat_attachments.take_pending(sender)
+    if ids:
+        return ids
+    pending = converse.get_pending(sender) or {}
+    return [
+        str(a).strip()
+        for a in (pending.get("attachment_ids") or [])
+        if str(a).strip()
+    ]
+
+
+def _start_task(
+    sender: str,
+    project: str,
+    instruction: str,
+    *,
+    attachments: list[str] | None = None,
+) -> None:
     registry = projects.projects()
     if project not in registry:
         known = ", ".join(registry) or "(none)"
@@ -203,13 +252,26 @@ def _start_task(sender: str, project: str, instruction: str) -> None:
         if t.get("id")
     ]
     parallel_n = len(other_inflight)
+    attach_ids = (
+        [str(a).strip() for a in attachments if str(a).strip()]
+        if attachments is not None
+        else _claim_attachments_for_task(sender)
+    )
     task_id = uuid.uuid4().hex[:12]
-    tasks.create_task(task_id, sender, project, instruction)
+    tasks.create_task(
+        task_id, sender, project, instruction, attachments=attach_ids or None
+    )
     task_events.record(
         task_id,
         "task_accepted",
-        f"Task accepted for {project} — investigation pending",
+        f"Task accepted for {project} — investigation pending"
+        + (
+            f" ({len(attach_ids)} image attachment{'s' if len(attach_ids) != 1 else ''})"
+            if attach_ids
+            else ""
+        ),
         stage="queued",
+        detail={"attachments": attach_ids} if attach_ids else None,
     )
     queue.enqueue(task_id, kind="execute")
     converse.remember_work(sender, project=project, instruction=instruction, task_id=task_id)
@@ -304,6 +366,17 @@ def handle(sender: str, body: str) -> None:
         send_text(sender, _help(), level="info")
         return
 
+    from orchestrator import attachments as chat_attachments
+
+    try:
+        _handle_inner(sender, body)
+    finally:
+        # Drop unused image attachments that were not claimed by a new task
+        # (or stashed onto a need_project clarification).
+        chat_attachments.clear_pending(sender)
+
+
+def _handle_inner(sender: str, body: str) -> None:
     registry = projects.projects()
     llm = llm_chat.understand(body, registry, sender=sender)
     intent = converse.resolve_intent(
@@ -332,6 +405,9 @@ def handle(sender: str, body: str) -> None:
         return
 
     if intent.kind == "cancel":
+        from orchestrator import attachments as chat_attachments
+
+        chat_attachments.clear_pending(sender)
         send_text(
             sender,
             soft_reply or "Okay, cancelled. What would you like to do instead?",
@@ -610,7 +686,15 @@ def handle(sender: str, body: str) -> None:
 
     if intent.kind == "task_need_project":
         names = ", ".join(registry) if registry else "(none registered)"
-        converse.set_pending(sender, kind="need_project", instruction=intent.instruction)
+        from orchestrator import attachments as chat_attachments
+
+        attach_ids = chat_attachments.take_pending(sender)
+        converse.set_pending(
+            sender,
+            kind="need_project",
+            instruction=intent.instruction,
+            attachment_ids=attach_ids,
+        )
         fallback = (
             f"Sure - I can do that. Which project should I use?\n\n{names}\n\n"
             "Just reply with the project name (or say cancel)."
@@ -625,8 +709,14 @@ def handle(sender: str, body: str) -> None:
 
     if intent.kind == "task":
         assert intent.project and intent.instruction
+        attach_ids = _claim_attachments_for_task(sender)
         converse.clear_pending(sender)
-        _start_task(sender, intent.project, intent.instruction)
+        _start_task(
+            sender,
+            intent.project,
+            intent.instruction,
+            attachments=attach_ids,
+        )
         return
 
     if intent.kind == "retry":
@@ -884,11 +974,27 @@ def handle(sender: str, body: str) -> None:
             "DEPLOY",
         }
         if task["status"] != "review" and not retry_ok:
-            send_text(
-                sender,
-                f"Task {task['id']} isn't ready for approval yet - it's currently {task['status']}. "
-                'Ask "how is my last task going?" for an update.',
-            )
+            if task["status"] == "published":
+                send_text(
+                    sender,
+                    f"Task {task['id']} is already published — nothing left to approve. "
+                    "Your project folder already has those changes. "
+                    "Start a new request if you want more work, or open Activity for older tasks.",
+                    level="info",
+                )
+            elif task["status"] == "publishing":
+                send_text(
+                    sender,
+                    f"Task {task['id']} is still applying/pushing — give it a moment, "
+                    'then ask "how is my last task going?"',
+                    level="info",
+                )
+            else:
+                send_text(
+                    sender,
+                    f"Task {task['id']} isn't ready for approval yet - it's currently {task['status']}. "
+                    'Ask "how is my last task going?" for an update.',
+                )
             return
         if config.DRY_RUN:
             send_text(
