@@ -127,6 +127,18 @@ def test_projects_round_trip(tmp_path, monkeypatch):
     assert "what can i help" in after_clear[0]["text"].lower()
 
 
+def test_notifications_default_on_with_manual_off(tmp_path, monkeypatch):
+    client = _client(monkeypatch, tmp_path)
+    assert _login(client).status_code == 200
+    html = client.get("/chat").text
+    assert "orch_notify_off" in html
+    assert "notificationsWanted" in html
+    assert "toggleNotifications" in html
+    assert "ensureNotifications({quiet: true})" in html
+    assert "Notifications on — click to turn off" in html
+    assert "enableNotifications" not in html
+
+
 def test_message_feedback_endpoint(tmp_path, monkeypatch):
     client = _client(monkeypatch, tmp_path)
     assert _login(client).status_code == 200

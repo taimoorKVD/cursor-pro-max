@@ -56,7 +56,7 @@ Android Chrome: menu → **Install app** / **Add to Home screen**.
 
 ### Notifications
 
-Tap the **bell** in the chat header and allow notifications. New replies are tagged:
+Browser notifications are **on by default**. On first visit the page asks for permission (and again on the first click/keypress if the browser requires a gesture). Tap the **bell** in the chat header to turn them off; tap again to turn them back on. New replies are tagged:
 
 | Level | When |
 |-------|------|

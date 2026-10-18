@@ -1,0 +1,17 @@
+--- Cursor Agent Debug Session 2026-10-18T13:13:16.930Z ---
+{"event":"debug-session-start","directory":"D:\\taimoorKVD\\my-automation-project\\whatsapp-cursor-orchestrator\\data\\workspaces\\d0f3038488d7\\.orch-agent-home\\cursor-agent-logs-Backup","logFile":"D:\\taimoorKVD\\my-automation-project\\whatsapp-cursor-orchestrator\\data\\workspaces\\d0f3038488d7\\.orch-agent-home\\cursor-agent-logs-Backup\\session-2026-10-18T13-13-16-928Z-8776-1.log","pid":8776,"startTime":"2026-10-18T13:13:16.931Z"}
+[2026-10-18T13:13:16.931Z] ripgrep.configureSuccess {"ripgrepPath":"C:\\Users\\naeem\\AppData\\Local\\cursor-agent\\versions\\2026.10.16-e3cb207\\rg.exe","ripgrepSource":"colocated"}
+Stack trace:
+    at J (C:\Users\naeem\AppData\Local\cursor-agent\versions\2026.10.16-e3cb207\index.js:408:5779)
+    at P (C:\Users\naeem\AppData\Local\cursor-agent\versions\2026.10.16-e3cb207\index.js:408:9436)
+    at C:\Users\naeem\AppData\Local\cursor-agent\versions\2026.10.16-e3cb207\index.js:408:11002
+[2026-10-18T13:13:16.931Z] sandbox.configureSuccess {"sandboxBinary":"C:\\Users\\naeem\\AppData\\Local\\cursor-agent\\versions\\2026.10.16-e3cb207\\cursorsandbox.exe","sandboxSource":"colocated"}
+Stack trace:
+    at J (C:\Users\naeem\AppData\Local\cursor-agent\versions\2026.10.16-e3cb207\index.js:408:5779)
+    at T (C:\Users\naeem\AppData\Local\cursor-agent\versions\2026.10.16-e3cb207\index.js:408:9698)
+    at C:\Users\naeem\AppData\Local\cursor-agent\versions\2026.10.16-e3cb207\index.js:408:11006
+[2026-10-18T13:13:16.936Z] analytics.track {"eventName":"cli.launch"}
+[2026-10-18T13:13:16.991Z] statsig.setupLazyInit {"endpoint":"https://api2.cursor.sh"}
+[2026-10-18T13:13:17.019Z] statsig.initialize.success {"fromCache":true}
+[2026-10-18T13:13:19.602Z] statsig.refresh.success {"clientInitialized":true}
+[2026-10-18T13:13:20.190Z] stderr.intercepted {"text":"Indexing failed: [unauthenticated] Error\nConnectError: [unauthenticated] Error\n    at a (C:\\Users\\naeem\\AppData\\Local\\cursor-agent\\versions\\2026.10.16-e3cb207\\index.js:414:5677838)\n    at c (C:\\Users\\naeem\\AppData\\Local\\cursor-agent\\versions\\2026.10.16-e3cb207\\index.js:414:5678234)\n    at next (C:\\Users\\naeem\\AppData\\Local\\cursor-agent\\versions\\2026.10.16-e3cb207\\index.js:414:5590548)\n    at process.processTicksAndRejections (node:internal/process/task_queues:105:5)\n    at async C:\\Users\\naeem\\AppData\\Local\\cursor-agent\\versions\\2026.10.16-e3cb207\\index.js:414:2735400\n    at async Object.unary (C:\\Users\\naeem\\AppData\\Local\\cursor-agent\\versions\\2026.10.16-e3cb207\\index.js:414:5588701)\n    at async Object.fastRepoInitHandshakeV2 (C:\\Users\\naeem\\AppData\\Local\\cursor-agent\\versions\\2026.10.16-e3cb207\\index.js:414:5673055)\n    at async R.index (C:\\Users\\naeem\\AppData\\Local\\cursor-agent\\versions\\2026.10.16-e3cb207\\index.js:414:1866187)\n    at async M.indexNow (C:\\Users\\naeem\\AppData\\Local\\c"}

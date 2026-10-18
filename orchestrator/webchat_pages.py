@@ -462,7 +462,7 @@ CHAT_HTML = _CHAT_HEAD + r"""
     <button id="progressToggle" type="button" title="Activity" aria-controls="progressPanel" aria-expanded="false" class="hdr-icon-btn [&.on]:border-accent/35 [&.on]:bg-accent-soft [&.on]:text-accent">
       <svg class="size-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 19V5"/><path d="M4 19h16"/><path d="m8 14 3-3 3 2 4-5"/></svg>
     </button>
-    <button id="notifyBtn" type="button" title="Enable notifications" class="hdr-icon-btn [&.on]:border-accent/35 [&.on]:bg-accent-soft [&.on]:text-accent">
+    <button id="notifyBtn" type="button" title="Notifications on" aria-pressed="true" class="hdr-icon-btn [&.on]:border-accent/35 [&.on]:bg-accent-soft [&.on]:text-accent">
       <svg class="size-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 9a6 6 0 1 1 12 0c0 7 3 7 3 7H3s3 0 3-7"/><path d="M10 19a2 2 0 0 0 4 0"/></svg>
     </button>
     <button id="refresh" type="button" title="Reload chat from server" class="hdr-icon-btn">
@@ -896,43 +896,90 @@ desktopSidebarMq.addEventListener('change', () => {
   syncSidebarControls();
 });
 
+const NOTIFY_OFF_KEY = 'orch_notify_off';
+
+function notificationsWanted() {
+  try { return localStorage.getItem(NOTIFY_OFF_KEY) !== '1'; } catch (e) { return true; }
+}
+
+function setNotificationsWanted(on) {
+  try {
+    if (on) localStorage.removeItem(NOTIFY_OFF_KEY);
+    else localStorage.setItem(NOTIFY_OFF_KEY, '1');
+  } catch (e) {}
+}
+
+function notificationsActive() {
+  return ('Notification' in window)
+    && Notification.permission === 'granted'
+    && notificationsWanted();
+}
+
 function syncNotifyBtn() {
   if (!('Notification' in window)) {
     notifyBtn.style.display = 'none';
     return;
   }
-  notifyBtn.classList.toggle('on', Notification.permission === 'granted');
-  notifyBtn.title = Notification.permission === 'granted'
-    ? 'Notifications on'
-    : 'Enable notifications';
+  const active = notificationsActive();
+  const wanted = notificationsWanted();
+  notifyBtn.classList.toggle('on', active);
+  notifyBtn.setAttribute('aria-pressed', active ? 'true' : 'false');
+  if (Notification.permission === 'denied') {
+    notifyBtn.title = 'Notifications blocked in browser settings';
+  } else if (!wanted) {
+    notifyBtn.title = 'Notifications off — click to enable';
+  } else if (active) {
+    notifyBtn.title = 'Notifications on — click to turn off';
+  } else {
+    notifyBtn.title = 'Notifications on (waiting for browser permission)';
+  }
 }
 
-async function enableNotifications() {
+async function ensureNotifications({quiet = false} = {}) {
   if (!('Notification' in window)) {
-    showToast('Notifications not supported here');
-    return;
+    if (!quiet) showToast('Notifications not supported here');
+    return false;
   }
-  const perm = await Notification.requestPermission();
+  if (!notificationsWanted()) {
+    syncNotifyBtn();
+    return false;
+  }
+  let perm = Notification.permission;
+  if (perm === 'default') {
+    try { perm = await Notification.requestPermission(); } catch (e) { perm = Notification.permission; }
+  }
   syncNotifyBtn();
   if (perm !== 'granted') {
-    showToast('Notifications blocked - enable in browser settings');
-    return;
+    if (!quiet) showToast('Notifications blocked - enable in browser settings');
+    return false;
   }
   if ('serviceWorker' in navigator) {
     try {
       await navigator.serviceWorker.register('/chat/sw.js', {scope: '/chat/'});
-      showToast('Notifications enabled');
-    } catch (e) {
-      showToast('Notifications on (no service worker)');
-    }
-  } else {
-    showToast('Notifications enabled');
+    } catch (e) {}
   }
+  return true;
+}
+
+async function toggleNotifications() {
+  if (!('Notification' in window)) {
+    showToast('Notifications not supported here');
+    return;
+  }
+  if (notificationsWanted()) {
+    setNotificationsWanted(false);
+    syncNotifyBtn();
+    showToast('Notifications off');
+    return;
+  }
+  setNotificationsWanted(true);
+  const ok = await ensureNotifications({quiet: false});
+  if (ok) showToast('Notifications on');
 }
 
 function pushNotify(m) {
   if (m.direction !== 'out') return;
-  if (!('Notification' in window) || Notification.permission !== 'granted') return;
+  if (!notificationsActive()) return;
   const level = m.level || 'info';
   if (level === 'info' && document.visibilityState === 'visible' && document.hasFocus()) return;
   const title = 'Orchestrator - ' + (LEVEL_TITLE[level] || 'Update');
@@ -2951,8 +2998,22 @@ document.getElementById('refresh').addEventListener('click', async () => {
   showToast('Chat reloaded');
 });
 document.getElementById('clearChat').addEventListener('click', doClearChat);
-notifyBtn.addEventListener('click', enableNotifications);
+notifyBtn.addEventListener('click', toggleNotifications);
 syncNotifyBtn();
+// Notifications stay on by default; only a manual bell toggle turns them off.
+ensureNotifications({quiet: true});
+(function autoNotifyOnGesture() {
+  if (!('Notification' in window)) return;
+  const once = () => {
+    document.removeEventListener('pointerdown', once, true);
+    document.removeEventListener('keydown', once, true);
+    if (notificationsWanted() && Notification.permission === 'default') {
+      ensureNotifications({quiet: true});
+    }
+  };
+  document.addEventListener('pointerdown', once, true);
+  document.addEventListener('keydown', once, true);
+})();
 
 let fitTimer = null;
 function fitViewport() {
