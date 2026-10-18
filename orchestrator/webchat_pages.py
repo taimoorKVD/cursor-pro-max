@@ -343,10 +343,6 @@ CHAT_HTML = _CHAT_HEAD + r"""
     </button>
   </div>
   <div class="flex flex-col gap-3 px-3.5 pb-3">
-    <button type="button" id="newChat" class="inline-flex min-h-11 w-full cursor-pointer items-center justify-center gap-2 rounded-full border-0 bg-accent px-4 text-[14px] font-semibold text-white shadow-[0_8px_20px_rgba(0,104,74,.22)] transition hover:brightness-105 active:scale-[.98]">
-      <svg class="size-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 5v14M5 12h14"/></svg>
-      New Chat
-    </button>
     <label class="flex items-center gap-2 rounded-full border border-line bg-white px-3 py-2.5 text-muted focus-within:border-accent/40 focus-within:text-accent">
       <svg class="size-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
       <input id="projectSearch" class="min-w-0 flex-1 border-0 bg-transparent text-[13px] text-ink outline-none placeholder:text-[#8a9a93]" type="search" placeholder="Search chats" autocomplete="off">
@@ -2630,7 +2626,6 @@ if (projectsRootInput) {
   });
 }
 projectSearch.addEventListener('input', () => renderProjects(projectSearch.value));
-document.getElementById('newChat').addEventListener('click', () => { setSidebarOpen(false); doClearChat(); });
 (function setupImageAttachments() {
   const attachBtn = document.getElementById('attachBtn');
   const attachInput = document.getElementById('attachInput');
