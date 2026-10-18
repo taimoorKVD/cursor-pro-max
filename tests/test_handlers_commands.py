@@ -184,3 +184,35 @@ def test_chat_scan_and_register_project(tmp_path, monkeypatch):
     handle("web:owner", "yes")
     assert "removed" in replies[-1].lower()
     assert load_projects(projects_file, strict=True) == {}
+
+
+def test_chat_create_project_from_scratch(tmp_path, monkeypatch):
+    replies = _setup(tmp_path, monkeypatch)
+    root = tmp_path / "www"
+    root.mkdir()
+    projects_file = tmp_path / "projects.json"
+    monkeypatch.setenv("PROJECTS_ROOT", str(root))
+    monkeypatch.setenv("PROJECTS_FILE", str(projects_file))
+    monkeypatch.setenv("PROJECTS_ROOT_FILE", str(tmp_path / "projects_root.json"))
+    config.settings.reload()
+
+    handle("web:owner", "create project Brand New")
+    assert "created" in replies[-1].lower()
+    assert "what should i build" in replies[-1].lower()
+    assert (root / "brand-new").is_dir()
+
+    from orchestrator.projects import load_projects
+    from orchestrator import session
+
+    assert "brand-new" in load_projects(projects_file, strict=True)
+    assert session.get("web:owner").get("active_project") == "brand-new"
+
+    started = []
+    monkeypatch.setattr(
+        "orchestrator.handlers._start_task",
+        lambda sender, project, instruction, **k: started.append((project, instruction)),
+    )
+    handle("web:owner", "create project api-svc: scaffold a FastAPI hello world")
+    assert started == [("api-svc", "scaffold a FastAPI hello world")]
+    assert (root / "api-svc").is_dir()
+    assert any("created" in r.lower() and "api-svc" in r.lower() for r in replies)

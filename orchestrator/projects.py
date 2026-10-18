@@ -483,6 +483,78 @@ def save_projects(
     return validated
 
 
+def create_project(
+    name: str,
+    *,
+    projects_file: Path | None = None,
+    root: Path | None = None,
+    **fields: Any,
+) -> dict[str, Any]:
+    """Create a new folder under PROJECTS_ROOT and register it.
+
+    Used for build-from-scratch: pick scan root → choose folder name → mkdir + register.
+    """
+    display = str(name or "").strip()
+    if not display:
+        raise ProjectConfigError("Project name is required")
+    try:
+        pid = slugify_project_id(display) if not _is_valid_project_id(display) else display
+    except ProjectConfigError as exc:
+        raise ProjectConfigError(f"Invalid project name {name!r}") from exc
+    if not _is_valid_project_id(pid):
+        raise ProjectConfigError(f"Invalid project name {name!r}")
+    if pid.lower() in {s.lower() for s in _SKIP_DIR_NAMES} or pid.startswith("."):
+        raise ProjectConfigError(f"Reserved or invalid folder name: {pid}")
+
+    scan_root = root or projects_root()
+    if scan_root is None:
+        raise ProjectConfigError(
+            "No scan directory is set. Use Manage → Choose folder, or say "
+            '"set projects root C:/laragon/www".'
+        )
+    try:
+        root_resolved = scan_root.resolve(strict=True)
+    except FileNotFoundError as exc:
+        raise ProjectConfigError(f"PROJECTS_ROOT does not exist: {scan_root}") from exc
+    if not root_resolved.is_dir():
+        raise ProjectConfigError(f"PROJECTS_ROOT is not a directory: {scan_root}")
+
+    folder = root_resolved / pid
+    if folder.exists():
+        raise ProjectConfigError(
+            f"Folder already exists: {folder}. "
+            f'Say "add project {pid}" to register it, or pick another name.'
+        )
+
+    registry = load_projects(projects_file, strict=False)
+    if pid in registry:
+        raise ProjectConfigError(f"Project {pid!r} is already registered")
+
+    try:
+        folder.mkdir(parents=False, exist_ok=False)
+    except OSError as exc:
+        raise ProjectConfigError(f"Could not create folder {folder}: {exc}") from exc
+
+    try:
+        extra = {k: v for k, v in fields.items() if k not in {"type", "display_name"}}
+        return register_project(
+            pid,
+            folder,
+            projects_file=projects_file,
+            root=root_resolved,
+            type=str(fields.get("type") or "local"),
+            display_name=str(fields.get("display_name") or display),
+            **extra,
+        )
+    except Exception:
+        try:
+            if folder.is_dir() and not any(folder.iterdir()):
+                folder.rmdir()
+        except OSError:
+            pass
+        raise
+
+
 def register_project(
     project_id: str,
     path: str | Path,

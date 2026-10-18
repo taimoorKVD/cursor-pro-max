@@ -36,6 +36,7 @@ def _help() -> str:
         '- "Continue working" to resume the same Cursor session when possible\n'
         '- "Reject that" to discard a review\n'
         '- "Set projects root C:/laragon/www" then "Scan projects" / "Add project velora"\n'
+        '- "Create project my-app" or "Create project my-app: scaffold a todo API"\n'
         '- "Update project lifeos set allow_push true"\n'
         '- "Rename chat lifeos to My App" or "Change chat name to My App"\n\n'
         "Status answers come from real execution events — I won't invent progress."
@@ -71,7 +72,8 @@ def _format_scan_candidates(root: str | None = None) -> str:
         registered = sum(1 for c in candidates if c.get("registered"))
         return (
             f"{header}\nEverything there is already registered ({registered} project(s)). "
-            'Say "add project <folder>" if you create a new one later, or '
+            'Say "create project <name>" to make a new folder, '
+            '"add project <folder>" if you add one on disk later, or '
             '"set projects root <path>" to scan a different folder.'
         )
     lines = [
@@ -82,6 +84,7 @@ def _format_scan_candidates(root: str | None = None) -> str:
         lines.append(f"- {c['id']} ({c['type']}) — {c['path']}")
     lines.append("")
     lines.append('To register one: "add project <id>" (safe defaults: push/deploy off).')
+    lines.append('To start from scratch: "create project <name>" (or "...: what to build").')
     lines.append('Change folder anytime: "set projects root C:/path/to/folder".')
     return "\n".join(lines)
 
@@ -91,8 +94,9 @@ def _format_projects() -> str:
     if not registry:
         return (
             "I don't have any projects set up yet. "
-            'Say "scan projects" to find folders on your laptop, then '
-            '"add project <name>" to register one.'
+            'Say "set projects root C:/path" then "create project <name>" '
+            "to start from scratch, or \"scan projects\" / \"add project <name>\" "
+            "for an existing folder."
         )
     lines = ["Here are your projects:"]
     for name, cfg in registry.items():
@@ -558,6 +562,45 @@ def _handle_inner(sender: str, body: str) -> None:
         )
         return
 
+    if intent.kind == "create_project":
+        token = (intent.project or "").strip()
+        if not token:
+            send_text(
+                sender,
+                'Tell me a folder name, e.g. "create project my-app" '
+                'or "create project my-app: scaffold a Flask API".',
+            )
+            return
+        try:
+            created = projects.create_project(token)
+        except projects.ProjectConfigError as exc:
+            send_text(sender, str(exc))
+            return
+        session.switch_project(sender, created["id"])
+        audit.record(
+            "project_created",
+            actor=sender,
+            detail={"project": created["id"], "path": created.get("path")},
+        )
+        first_build = (intent.instruction or "").strip()
+        if first_build:
+            send_text(
+                sender,
+                f"Created {created['id']} at {created['path']} and started building.",
+                level="info",
+            )
+            _start_task(sender, created["id"], first_build)
+            return
+        converse.set_pending(sender, kind="offer_project", project=created["id"])
+        send_text(
+            sender,
+            f"Created project {created['id']} at {created['path']}. "
+            "Push and deploy stay off until you enable them. "
+            "What should I build there?",
+            level="info",
+        )
+        return
+
     if intent.kind == "register_project":
         token = (intent.project or "").strip()
         if not token:
@@ -580,7 +623,8 @@ def _handle_inner(sender: str, body: str) -> None:
             send_text(
                 sender,
                 f'I couldn\'t find a folder matching "{token}" under your projects root. '
-                'Say "scan projects" to see candidates.',
+                'Say "scan projects" to see candidates, or '
+                f'"create project {token}" to make a new folder.',
             )
             return
         if match.get("registered"):

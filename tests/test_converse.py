@@ -130,6 +130,19 @@ def test_parse_scan_register_update_remove_projects():
     assert set_root.instruction and "Users" in set_root.instruction.replace("\\", "/")
     assert parse_intent("where is the projects root?", REGISTRY).kind == "show_projects_root"
 
+    created = parse_intent("create project my-app", REGISTRY)
+    assert created.kind == "create_project" and created.project == "my-app"
+    assert created.instruction is None
+    created_build = parse_intent(
+        "create project My App: scaffold a Flask todo API",
+        REGISTRY,
+    )
+    assert created_build.kind == "create_project"
+    assert created_build.project == "My App"
+    assert created_build.instruction and "Flask" in created_build.instruction
+    assert parse_intent("new project demo", REGISTRY).kind == "create_project"
+    assert parse_intent("create a project called demo", REGISTRY).kind == "create_project"
+
     reg = parse_intent("add project velora", REGISTRY)
     assert reg.kind == "register_project" and reg.project == "velora"
     assert parse_intent("register truck-lts", REGISTRY).kind == "register_project"

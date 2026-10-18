@@ -11,6 +11,7 @@ from orchestrator.projects import (
     ProjectConfigError,
     browse_directories,
     clear_projects_root_override,
+    create_project,
     discover_candidates,
     load_projects,
     projects_root,
@@ -72,6 +73,41 @@ def test_discover_candidates_classifies_and_skips(tmp_path, monkeypatch):
     assert by_id["beta"]["registered"] is False
     assert "node_modules" not in by_id
     assert all(not c["id"].startswith(".") for c in found)
+
+
+def test_create_project_mkdir_and_register(tmp_path, monkeypatch):
+    root, projects_file = _setup_root(tmp_path, monkeypatch)
+    created = create_project("My App")
+    assert created["id"] == "my-app"
+    assert created["display_name"] == "My App"
+    assert created["type"] == "local"
+    assert created["allow_push"] is False
+    folder = Path(created["path"])
+    assert folder.is_dir()
+    assert folder.parent.resolve() == root.resolve()
+    assert folder.name == "my-app"
+    loaded = load_projects(projects_file, strict=True)
+    assert "my-app" in loaded
+
+    with pytest.raises(ProjectConfigError, match="already"):
+        create_project("my-app")
+
+
+def test_create_project_rejects_reserved_and_missing_root(tmp_path, monkeypatch):
+    root, _projects_file = _setup_root(tmp_path, monkeypatch)
+    with pytest.raises(ProjectConfigError, match="Reserved|invalid"):
+        create_project("node_modules")
+
+    monkeypatch.setenv("PROJECTS_ROOT", "")
+    monkeypatch.setenv("PROJECTS_ROOT_FILE", str(tmp_path / "empty_root.json"))
+    config.settings.reload()
+    with pytest.raises(ProjectConfigError, match="scan directory"):
+        create_project("fresh", root=None)
+
+    # Explicit root still works when env is cleared.
+    created = create_project("fresh", root=root)
+    assert created["id"] == "fresh"
+    assert (root / "fresh").is_dir()
 
 
 def test_register_update_remove_round_trip(tmp_path, monkeypatch):

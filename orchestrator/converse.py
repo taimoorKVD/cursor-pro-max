@@ -488,12 +488,25 @@ def parse_intent(text: str, registry: dict[str, Any], sender: str = "") -> Inten
     # After "Yes - lifeos is registered. Want me to work on it?"
     # accept: "yes, remove the welcome back text..."
     # Do NOT steal unrelated questions (e.g. "what projects do I have?").
+    # Do NOT steal registry commands ("create project X", "scan projects", …).
     if pending and pending.get("kind") == "offer_project" and pending.get("project"):
         offered = pending["project"]
         if _is_projects_list_request(lowered):
             clear_pending(sender)
             return Intent(kind="projects", raw=raw)
-        workish = bool(
+        registry_cmd = bool(
+            re.match(
+                r"^(?:create|new)\s+(?:a\s+)?(?:new\s+)?project\b|"
+                r"^(?:add|register|remove|unregister|delete)\s+(?:project\s+)?|"
+                r"^(?:scan|discover)\b|"
+                r"^(?:set|use|change)\s+(?:the\s+)?(?:projects?\s+)?"
+                r"(?:root|folder|directory|dir)\b|"
+                r"^(?:update|edit)\s+project\b|"
+                r"^(?:find)\b.{0,20}\b(?:new\s+)?projects?\b",
+                lowered,
+            )
+        )
+        workish = (not registry_cmd) and bool(
             re.search(
                 rf"\b({_WORK_VERBS}|yes|yeah|yep|sure|ok|okay|do it|go ahead)\b",
                 lowered,
@@ -550,6 +563,27 @@ def parse_intent(text: str, registry: dict[str, Any], sender: str = "") -> Inten
 
     if _is_show_projects_root_request(lowered):
         return Intent(kind="show_projects_root", raw=raw)
+
+    # Create-from-scratch before scan: "new project demo" must not match scan's
+    # "new projects" phrasing.
+    m = re.fullmatch(
+        r"(?:create|new)\s+(?:a\s+)?(?:new\s+)?project\s+"
+        r"(?:called\s+|named\s+|folder\s+)?"
+        r"([a-zA-Z0-9][a-zA-Z0-9 _-]{0,63}?)"
+        r"(?:\s*:\s*(.+))?$",
+        raw,
+        re.I | re.S,
+    )
+    if m:
+        name = m.group(1).strip().rstrip(".,!")
+        instruction = (m.group(2) or "").strip() or None
+        if name:
+            return Intent(
+                kind="create_project",
+                project=name,
+                instruction=instruction,
+                raw=raw,
+            )
 
     if _is_scan_projects_request(lowered):
         scan_root = _extract_scan_root_path(raw)

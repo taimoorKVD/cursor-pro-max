@@ -913,6 +913,26 @@ async def register_project_api(request: Request) -> JSONResponse:
     if data is None:
         return _json({"error": "Bad request"}, 400)
     path = str(data.get("path") or "").strip()
+    name = str(data.get("name") or data.get("folder") or "").strip()
+    create_flag = bool(data.get("create"))
+    # Build from scratch: mkdir under scan root + register (no existing path).
+    if create_flag or (name and not path):
+        from orchestrator.projects import ProjectConfigError, create_project
+
+        folder_name = name or str(data.get("id") or data.get("project") or "").strip()
+        if not folder_name:
+            return _json({"error": "name is required to create a project"}, 400)
+        try:
+            created = create_project(folder_name)
+        except ProjectConfigError as exc:
+            return _json({"error": str(exc)}, 400)
+        audit.record(
+            "project_created",
+            actor=SENDER,
+            detail={"project": created["id"], "path": created.get("path")},
+        )
+        return _json({"ok": True, "created": True, "project": created})
+
     if not path:
         return _json({"error": "path is required"}, 400)
     project_id = str(data.get("id") or data.get("project") or "").strip()

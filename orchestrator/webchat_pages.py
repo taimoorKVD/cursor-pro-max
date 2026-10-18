@@ -384,7 +384,7 @@ CHAT_HTML = _CHAT_HEAD + r"""
   <div class="flex shrink-0 items-center justify-between gap-2 border-b border-line px-3 py-2">
     <div class="min-w-0">
       <strong class="block font-display text-[0.95rem] font-semibold tracking-[-.02em] text-ink">Manage projects</strong>
-      <span class="block text-[11px] text-muted">Scan a folder and register projects.</span>
+      <span class="block text-[11px] text-muted">Choose a folder, create or register, then build.</span>
     </div>
     <button type="button" id="manageDrawerClose" class="inline-flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-lg border border-line bg-white text-ink transition hover:bg-accent-soft" aria-label="Close manage" title="Close">
       <svg class="size-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6 6 18"/></svg>
@@ -409,6 +409,14 @@ CHAT_HTML = _CHAT_HEAD + r"""
           <button type="button" id="projectsRootSaveBtn" class="shrink-0 cursor-pointer rounded-full border border-line bg-chip px-2.5 text-[11px] font-semibold text-ink hover:bg-accent-soft">Save</button>
         </div>
       </details>
+    </section>
+    <section class="flex flex-col gap-1.5 rounded-xl border border-line bg-white p-2.5">
+      <div class="text-[10px] font-bold tracking-[.04em] text-muted uppercase">New project</div>
+      <div class="text-[11px] text-muted">Creates a folder under the scan directory, registers it, then opens the chat to start building.</div>
+      <div class="flex gap-1">
+        <input id="newProjectNameInput" class="min-w-0 flex-1 rounded-lg border border-line bg-white px-2 py-1.5 text-[12px] text-ink outline-none placeholder:text-[#8a9a93] focus:border-accent/40" type="text" placeholder="Folder name (e.g. my-app)" autocomplete="off" spellcheck="false">
+        <button type="button" id="newProjectCreateBtn" class="shrink-0 cursor-pointer rounded-full border-0 bg-accent px-2.5 text-[11px] font-semibold text-white hover:brightness-105">Create</button>
+      </div>
     </section>
     <section class="flex min-h-0 flex-col gap-1 rounded-xl border border-line bg-white p-2.5">
       <div class="flex items-center justify-between gap-2">
@@ -654,6 +662,8 @@ const registeredCount = document.getElementById('registeredCount');
 const projectsRootInput = document.getElementById('projectsRootInput');
 const projectsRootHint = document.getElementById('projectsRootHint');
 const projectsRootLabel = document.getElementById('projectsRootLabel');
+const newProjectNameInput = document.getElementById('newProjectNameInput');
+const newProjectCreateBtn = document.getElementById('newProjectCreateBtn');
 const folderPickerModal = document.getElementById('folderPickerModal');
 const folderPickerList = document.getElementById('folderPickerList');
 const folderPickerPath = document.getElementById('folderPickerPath');
@@ -1294,6 +1304,45 @@ async function registerCandidate(c) {
     await scanProjectFolders();
   } catch (e) {
     showToast('Could not add project');
+  }
+}
+
+async function createNewProject() {
+  const name = (newProjectNameInput && newProjectNameInput.value || '').trim();
+  if (!name) {
+    showToast('Enter a folder name first');
+    if (newProjectNameInput) newProjectNameInput.focus();
+    return;
+  }
+  if (!(projectsRootInfo && projectsRootInfo.path)) {
+    showToast('Choose a scan folder first');
+    await openFolderPicker();
+    return;
+  }
+  if (newProjectCreateBtn) newProjectCreateBtn.disabled = true;
+  try {
+    const r = await fetch('/chat/projects', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({create: true, name}),
+    });
+    if (r.status === 401) { location.reload(); return; }
+    const j = await r.json();
+    if (!r.ok) {
+      showToast(j.error || 'Could not create project');
+      return;
+    }
+    const pid = j.project && j.project.id ? j.project.id : name;
+    if (newProjectNameInput) newProjectNameInput.value = '';
+    showToast('Created ' + pid + ' — describe what to build');
+    await refreshStatus();
+    try { await scanProjectFolders(); } catch (e) { /* ignore scan refresh */ }
+    closeManageDrawer();
+    await selectProject(pid);
+  } catch (e) {
+    showToast('Could not create project');
+  } finally {
+    if (newProjectCreateBtn) newProjectCreateBtn.disabled = false;
   }
 }
 
@@ -2455,6 +2504,17 @@ manageDrawerBackdrop.addEventListener('click', () => closeManageDrawer());
 document.getElementById('projectsScanBtn').addEventListener('click', () => scanProjectFolders());
 document.getElementById('projectsChooseFolderBtn').addEventListener('click', () => openFolderPicker());
 document.getElementById('projectsRootSaveBtn').addEventListener('click', () => saveProjectsRoot());
+if (newProjectCreateBtn) {
+  newProjectCreateBtn.addEventListener('click', () => createNewProject());
+}
+if (newProjectNameInput) {
+  newProjectNameInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      createNewProject();
+    }
+  });
+}
 document.getElementById('folderPickerSelect').addEventListener('click', () => selectFolderFromPicker());
 document.getElementById('folderPickerUp').addEventListener('click', () => {
   if (folderPickerParent === '') loadFolderPicker('');

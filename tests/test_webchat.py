@@ -429,6 +429,16 @@ def test_projects_api_scan_register_patch_delete(tmp_path, monkeypatch):
     assert deleted.status_code == 200
     assert client.get("/chat/projects").json()["projects"] == []
 
+    # Create from scratch: mkdir under root + register
+    made = client.post("/chat/projects", json={"create": True, "name": "Brand New"})
+    assert made.status_code == 200
+    body = made.json()
+    assert body.get("created") is True
+    assert body["project"]["id"] == "brand-new"
+    assert (root / "brand-new").is_dir()
+    listed_after = client.get("/chat/projects").json()["projects"]
+    assert any(p["id"] == "brand-new" for p in listed_after)
+
 
 def test_chat_page_includes_manage_projects_ui(tmp_path, monkeypatch):
     client = _client(monkeypatch, tmp_path)
@@ -442,6 +452,10 @@ def test_chat_page_includes_manage_projects_ui(tmp_path, monkeypatch):
     assert "projectsChooseFolderBtn" in html
     assert "folderPickerModal" in html
     assert "Choose folder" in html
+    assert 'id="newProjectNameInput"' in html
+    assert 'id="newProjectCreateBtn"' in html
+    assert "createNewProject" in html
+    assert "New project" in html
     # Folder picker reuses .confirm-modal CSS, which stays invisible until .open.
     assert "folderPickerModal.classList.add('open')" in html
     assert "folderPickerModal.classList.remove('open')" in html

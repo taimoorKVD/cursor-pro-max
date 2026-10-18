@@ -104,6 +104,21 @@ def test_parse_registry_management_kinds():
     assert reg.intent.kind == "register_project"
     assert reg.intent.project == "velora"
 
+    created = _parse_payload(
+        {
+            "kind": "create_project",
+            "project": "my-app",
+            "instruction": "scaffold a todo API",
+        },
+        REGISTRY,
+        "create project my-app: scaffold a todo API",
+    )
+    assert created is not None
+    assert created.intent.kind == "create_project"
+    assert created.intent.project == "my-app"
+    assert created.intent.instruction and "todo" in created.intent.instruction
+    assert created.reply is None
+
     upd = _parse_payload(
         {
             "kind": "update_project",

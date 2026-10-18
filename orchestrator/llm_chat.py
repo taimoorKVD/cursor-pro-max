@@ -31,6 +31,7 @@ KINDS = frozenset(
         "set_projects_root",
         "show_projects_root",
         "register_project",
+        "create_project",
         "update_project",
         "remove_project",
         "tasks",
@@ -327,12 +328,14 @@ def _system_prompt(registry: dict[str, Any], sender: str) -> str:
         "Return ONLY a JSON object with keys:\n"
         "- kind: one of greet, thanks, help, how_it_works, cancel, projects, "
         "scan_projects, set_projects_root, show_projects_root, register_project, "
-        "update_project, remove_project, tasks, status, "
+        "create_project, update_project, remove_project, tasks, status, "
         "remaining, done_check, estimate, changes, stuck, continue_work, "
         "has_project, ask_instruction, task, task_need_project, approve, reject, "
         "cancel_task, local_git, retry, chat\n"
-        "- project: project id from the list (or folder id for register_project), or null\n"
-        "- instruction: what to change (for task / task_need_project / retry), or null\n"
+        "- project: project id from the list (or new folder name for "
+        "create_project / register_project), or null\n"
+        "- instruction: what to change (for task / task_need_project / retry), "
+        "or optional first-build brief for create_project, or null\n"
         "- updates: object of fields for update_project "
         "(allow_push/allow_deploy/apply_local bools, or display_name/description/…), else null\n"
         "- task_id: 12-char hex id if mentioned, else null\n"
@@ -343,7 +346,7 @@ def _system_prompt(registry: dict[str, Any], sender: str) -> str:
         "null for how_it_works/status/remaining/done_check/estimate/changes/stuck/"
         "continue_work/approve/reject/cancel_task/task/retry/local_git/"
         "scan_projects/set_projects_root/show_projects_root/register_project/"
-        "update_project/remove_project\n\n"
+        "create_project/update_project/remove_project\n\n"
         "Rules:\n"
         "- Use conversation history + Active session. If the user already chose a "
         "project and then describes a bug/change, kind=task with that project + instruction.\n"
@@ -366,6 +369,10 @@ def _system_prompt(registry: dict[str, Any], sender: str) -> str:
         "with instruction=path\n"
         '- \"where is the projects root?\" → kind \"show_projects_root\"\n'
         '- \"add project X\" / \"register X\" → kind \"register_project\" with project=X\n'
+        '- \"create project X\" / \"new project X\" → kind \"create_project\" with project=X '
+        "(mkdir under scan root + register; optional first build in instruction)\n"
+        '- \"create project X: scaffold a todo app\" → kind \"create_project\" with '
+        "project=X and instruction=scaffold brief\n"
         '- \"update project X set allow_push true\" → kind \"update_project\" with updates\n'
         '- \"rename chat X to My App\" / \"change chat name to My App\" → '
         'kind \"update_project\" with updates display_name '
@@ -388,7 +395,7 @@ def _system_prompt(registry: dict[str, Any], sender: str) -> str:
         '- Cancel clarifying a question → kind \"cancel\"\n'
         '- Small talk only when nothing actionable → kind \"chat\"\n'
         "- Never invent registered project names outside the known list "
-        "(register_project may use a new folder id)\n"
+        "(register_project / create_project may use a new folder name)\n"
         "- Keep reply under 900 characters, no markdown headings\n"
         "- Do not apologize repeatedly or re-ask for the project if history already has it"
     )
@@ -464,8 +471,8 @@ def _parse_payload(data: dict[str, Any], registry: dict[str, Any], raw: str) -> 
         match = next((n for n in registry if n.lower() == project_s.lower()), None)
         if match:
             project_s = match
-        elif kind in {"register_project", "remove_project", "update_project"}:
-            # Keep the token (new folder id or case-insensitive name).
+        elif kind in {"register_project", "create_project", "remove_project", "update_project"}:
+            # Keep the token (new folder id/name or case-insensitive name).
             pass
         elif kind in {"task", "has_project", "ask_instruction", "retry"}:
             project_s = None
@@ -530,7 +537,7 @@ def _parse_payload(data: dict[str, Any], registry: dict[str, Any], raw: str) -> 
             kind = "task_need_project"
         else:
             return None
-    elif kind in {"register_project", "remove_project"} and not project_s:
+    elif kind in {"register_project", "create_project", "remove_project"} and not project_s:
         return None
     elif kind == "update_project" and (not project_s or not updates):
         return None
