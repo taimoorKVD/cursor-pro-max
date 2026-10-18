@@ -235,6 +235,18 @@ def seen_message(message_id: str) -> bool:
     return bool(inserted)
 
 
+def delete_task(task_id: str) -> bool:
+    """Permanently remove a task and its jobs/events. Returns True if a row was deleted."""
+    with db.DB_LOCK, db.connect() as c:
+        from orchestrator.task_events import ensure_schema as ensure_events_schema
+
+        ensure_events_schema(c)
+        c.execute("DELETE FROM task_events WHERE task_id=?", (task_id,))
+        c.execute("DELETE FROM jobs WHERE task_id=?", (task_id,))
+        cur = c.execute("DELETE FROM tasks WHERE id=?", (task_id,))
+        return bool(cur.rowcount)
+
+
 def list_tasks_for_sender(sender: str, *, limit: int = 15) -> list[dict[str, Any]]:
     with db.DB_LOCK, db.connect() as c:
         rows = c.execute(

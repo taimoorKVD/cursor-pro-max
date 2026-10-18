@@ -167,6 +167,8 @@ def test_clear_chat_clears_recent_activity(tmp_path, monkeypatch):
     cleared = client.post("/chat/clear")
     assert cleared.status_code == 200
     assert cleared.json().get("canceled", 0) >= 1
+    assert cleared.json().get("deleted", 0) >= 1
+    assert tasks.get_task("webcleartask01") is None
 
     after = client.get("/chat/task-progress").json()
     assert after["ok"] is True
@@ -174,6 +176,7 @@ def test_clear_chat_clears_recent_activity(tmp_path, monkeypatch):
     assert after["events"] == []
     status = client.get("/chat/status").json()
     assert status["active_task"] is None
+    assert status["recent_tasks"] == []
 
 
 def test_clear_activity_keeps_chat_messages(tmp_path, monkeypatch):
@@ -202,13 +205,15 @@ def test_clear_activity_keeps_chat_messages(tmp_path, monkeypatch):
     cleared = client.post("/chat/clear-activity")
     assert cleared.status_code == 200
     assert cleared.json().get("canceled", 0) >= 1
+    assert cleared.json().get("deleted", 0) >= 2
 
     after = client.get("/chat/task-progress").json()
     assert after["task"] is None
     assert after["events"] == []
     assert task_events.list_events("webactclear001") == []
     assert task_events.list_events("webactclear002") == []
-    assert tasks.get_task("webactclear002")["execution_stage"] == "canceled"
+    assert tasks.get_task("webactclear001") is None
+    assert tasks.get_task("webactclear002") is None
 
     status_after = client.get("/chat/status").json()
     assert status_after["recent_tasks"] == []

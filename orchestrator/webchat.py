@@ -492,7 +492,7 @@ def logout() -> JSONResponse:
 
 @router.post("/chat/clear")
 def clear_chat(request: Request) -> JSONResponse:
-    """Delete chat messages and tear down isolated workspaces for a fresh start."""
+    """Delete chat messages, tasks, and isolated workspaces for a fresh start."""
     if not _authed(request):
         return _json({"error": "Unauthorized"}, 401)
     from orchestrator import history, retention, session

@@ -44,11 +44,11 @@ def cleanup_sender_workspaces(
     project: str | None = None,
     reason: str = "chat cleared",
 ) -> dict:
-    """Cancel active work and delete isolated workspaces for a chat/activity clear.
+    """Cancel active work, remove workspaces, and delete all tasks for this chat.
 
-    Returns ``{tasks, removed, canceled}``.
+    Returns ``{tasks, removed, canceled, deleted}``.
     """
-    from orchestrator import task_events, tasks
+    from orchestrator import tasks
     from orchestrator.process import cancel_tracked
 
     reason_label = (reason or "chat cleared").strip() or "chat cleared"
@@ -58,6 +58,7 @@ def cleanup_sender_workspaces(
     registry = projects.projects()
     removed = 0
     canceled = 0
+    deleted = 0
     for task in rows:
         tid = task["id"]
         status = task.get("status") or ""
@@ -74,42 +75,7 @@ def cleanup_sender_workspaces(
                     queue.fail_running_for_task(tid, f"Cancelled: {reason_label}")
                 except Exception:  # noqa: BLE001
                     pass
-            tasks.update_task(
-                tid,
-                status="failed",
-                execution_stage="canceled",
-                summary=f"Cancelled: {reason_label} — isolated workspace removed",
-                blocker=reason_label[:80].title(),
-                ended_at=db.now(),
-                agent_pid=None,
-            )
-            task_events.record(
-                tid,
-                "canceled",
-                f"Cancelled because {reason_label}",
-                stage="canceled",
-            )
             canceled += 1
-            task = tasks.get_task(tid) or task
-        else:
-            # Finished / other tasks must leave the activity history too.
-            # Do not change terminal statuses (illegal transitions); only hide them.
-            try:
-                tasks.update_task(
-                    tid,
-                    execution_stage="canceled",
-                    blocker=reason_label[:80].title(),
-                    summary=f"Cleared: {reason_label}",
-                    agent_pid=None,
-                )
-            except Exception:  # noqa: BLE001
-                pass
-            task = tasks.get_task(tid) or task
-        # Activity drawer history is wiped with chat/activity clear.
-        try:
-            task_events.clear_for_task(tid)
-        except Exception:  # noqa: BLE001
-            pass
         proj_cfg = registry.get(str(task.get("project") or ""))
         # Always try conventional path even if workspace column empty (collision leftovers).
         if workspace.remove_for_task(task, project_config=proj_cfg):
@@ -123,4 +89,15 @@ def cleanup_sender_workspaces(
                 branch=task.get("branch") or f"wa/{tid}",
             ):
                 removed += 1
-    return {"tasks": len(rows), "removed": removed, "canceled": canceled}
+        # Drop the task row (and jobs/events) so history does not linger after clear.
+        try:
+            if tasks.delete_task(tid):
+                deleted += 1
+        except Exception:  # noqa: BLE001
+            log.exception("Failed to delete task %s during %s", tid, reason_label)
+    return {
+        "tasks": len(rows),
+        "removed": removed,
+        "canceled": canceled,
+        "deleted": deleted,
+    }

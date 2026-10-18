@@ -171,13 +171,13 @@ def test_clear_sender_workspaces_removes_dirs(tmp_path, monkeypatch):
 
     result = retention.cleanup_sender_workspaces("web:owner", project="lifeos")
     assert result["removed"] >= 1
+    assert result["deleted"] >= 1
     assert not target.exists()
-    task = tasks.get_task("clearme000001")
-    assert not (task.get("workspace") or "").strip()
+    assert tasks.get_task("clearme000001") is None
 
 
 def test_clear_dismisses_review_so_progress_goes_idle(tmp_path, monkeypatch):
-    """Clear chat must cancel review tasks; progress must not stick to them."""
+    """Clear chat must delete review tasks; progress must not stick to them."""
     monkeypatch.setenv("DATABASE_FILE", str(tmp_path / "t.sqlite"))
     monkeypatch.setenv("WORK_ROOT", str(tmp_path / "work"))
     config.settings.reload()
@@ -201,10 +201,9 @@ def test_clear_dismisses_review_so_progress_goes_idle(tmp_path, monkeypatch):
 
     result = retention.cleanup_sender_workspaces("web:owner", project="lifeos")
     assert result["canceled"] >= 1
+    assert result["deleted"] >= 1
     session.set_active_task("web:owner", None, project="lifeos")
 
-    task = tasks.get_task("reviewclear001")
-    assert task["status"] == "failed"
-    assert task["execution_stage"] == "canceled"
+    assert tasks.get_task("reviewclear001") is None
     assert tasks.active_task_for_sender("web:owner", project="lifeos") is None
     assert task_events.list_events("reviewclear001") == []
