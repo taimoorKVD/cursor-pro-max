@@ -148,7 +148,7 @@ def test_history_and_llm_context_scoped_after_switch(tmp_path, monkeypatch):
     assert any("dark mode" in t["content"].lower() for t in life_turns)
 
 
-def test_handler_switch_announces_fresh_thread(tmp_path, monkeypatch):
+def test_handler_switch_does_not_announce(tmp_path, monkeypatch):
     monkeypatch.setenv("DATABASE_FILE", str(tmp_path / "t.sqlite"))
     monkeypatch.setenv("WORK_ROOT", str(tmp_path / "work"))
     monkeypatch.setenv("ORCHESTRATOR_WORKER", "false")
@@ -196,5 +196,7 @@ def test_handler_switch_announces_fresh_thread(tmp_path, monkeypatch):
     assert session.get("web:owner")["active_project"] == "lifeos"
     handle("web:owner", "Let's work on other-app.")
     assert session.get("web:owner")["active_project"] == "other-app"
-    assert any("switched from lifeos" in r.lower() for r in replies)
-    assert any("fresh" in r.lower() or "only for other-app" in r.lower() for r in replies)
+    # Project switches quietly — no automatic "Switched to/from …" notice.
+    assert not any("switched from" in r.lower() for r in replies)
+    assert not any("switched to" in r.lower() for r in replies)
+    assert any("other-app" in r.lower() and "active project" in r.lower() for r in replies)

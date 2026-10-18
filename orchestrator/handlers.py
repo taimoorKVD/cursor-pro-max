@@ -470,43 +470,24 @@ def _handle_inner(sender: str, body: str) -> None:
             return
         # Remember this project so "yes, remove the welcome text..." continues here.
         converse.set_pending(sender, kind="offer_project", project=project)
-        switched = session.switch_project(sender, project)
+        session.switch_project(sender, project)
         base = soft_reply or (
             f"Yes — {project} is registered ({cfg.get('type', 'project')}). "
             "Want me to work on it? Just tell me what to change "
             '(e.g. "fix dark mode on the login page").'
         )
-        if switched.get("changed") and switched.get("previous"):
-            base = (
-                f"Switched from {switched['previous']} to {project}. "
-                f"This chat is a fresh thread for {project} only "
-                f"(work on {switched['previous']} keeps running if it was in progress).\n\n{base}"
-            )
         send_text(sender, base)
         return
 
     if intent.kind == "ask_instruction":
         project = intent.project or "that project"
         converse.set_pending(sender, kind="offer_project", project=project)
-        switched = {"changed": False, "previous": None}
         if intent.project:
-            switched = session.switch_project(sender, intent.project)
+            session.switch_project(sender, intent.project)
         base = soft_reply or (
             f"Okay — I'll use {project} as the active project. "
             "What should I investigate or change there?"
         )
-        if switched.get("changed") and switched.get("previous"):
-            base = (
-                f"Switched from {switched['previous']} to {project}. "
-                f"Prior {switched['previous']} chat stays in that project's thread — "
-                f"this conversation is only for {project} now. "
-                f"Background agent work on {switched['previous']} is not cancelled.\n\n{base}"
-            )
-        elif switched.get("changed"):
-            base = (
-                f"Okay — {project} is active. Starting a fresh chat thread for this project.\n\n"
-                "What should I investigate or change there?"
-            )
         send_text(sender, base)
         return
 
