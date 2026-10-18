@@ -818,6 +818,15 @@ html[data-theme="dark"] {
     gap: 0.45rem;
     margin: 0.55rem 0 0.15rem;
   }
+  .msg-review-cta[data-review-resolved="1"] {
+    gap: 0;
+  }
+  .msg-review-resolved {
+    font-size: 0.72rem;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    color: var(--muted);
+  }
   .review-banner {
     display: flex;
     flex-wrap: wrap;

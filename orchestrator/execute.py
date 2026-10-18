@@ -14,17 +14,22 @@ from orchestrator.scrub import scrub
 
 log = logging.getLogger("orchestrator.execute")
 
-# Deduplicate milestone chat spam per task+event_type
+# Deduplicate milestone activity markers per task+event_type (chat stays quiet).
 _milestone_sent: set[str] = set()
 
 
 def _notify_milestone(sender: str, task_id: str, key: str, text: str, *, level: str = "info") -> None:
-    """Chat update for meaningful stage transitions only (no spam)."""
+    """Record stage milestones for Activity only — do not spam chat.
+
+    Callers already ``task_events.record`` the durable event. Chat gets a single
+    ack from task creation and one outcome message when coding finishes/fails.
+    """
+    del sender, text, level  # reserved for signature compatibility / future hooks
     token = f"{task_id}:{key}"
     if token in _milestone_sent:
         return
     _milestone_sent.add(token)
-    send_text(sender, text, level=level)
+    log.debug("Activity milestone %s (chat suppressed)", token)
 
 
 def _cancelled(task_id: str) -> bool:
@@ -181,6 +186,7 @@ def execute_task(task_id: str, *, job_id: int | None = None, fence: str | None =
                 + prompt
             )
 
+        salvaged_disconnect = False
         if config.DRY_RUN:
             task_events.record(
                 task_id,
@@ -317,22 +323,29 @@ def execute_task(task_id: str, *, job_id: int | None = None, fence: str | None =
                 daemon=True,
             )
             prep_thread.start()
+            agent_exc: BaseException | None = None
             try:
                 if _cancelled(task_id):
                     raise RuntimeError("Cancelled before Cursor agent start")
-                agent_result, exit_code = agent.run_agent(
-                    prompt,
-                    target,
-                    task_id=task_id,
-                    on_pid=_on_pid,
-                    on_heartbeat=_on_heartbeat,
-                    on_stream_event=_on_stream_event,
-                    evidence=evidence,
-                    resume_chat_id=resume_chat_id or None,
-                )
+                try:
+                    agent_result, exit_code = agent.run_agent(
+                        prompt,
+                        target,
+                        task_id=task_id,
+                        on_pid=_on_pid,
+                        on_heartbeat=_on_heartbeat,
+                        on_stream_event=_on_stream_event,
+                        evidence=evidence,
+                        resume_chat_id=resume_chat_id or None,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    agent_exc = exc
+                    agent_result = ""
+                    exit_code = -1
             finally:
                 stop_prep.set()
                 prep_thread.join(timeout=2)
+
             session_id = (getattr(evidence, "session_id", None) or "").strip()
             update_fields: dict = {"exit_code": exit_code, "agent_pid": None}
             if session_id:
@@ -342,7 +355,11 @@ def execute_task(task_id: str, *, job_id: int | None = None, fence: str | None =
             task_events.record(
                 task_id,
                 "agent_exited",
-                f"Cursor agent process exited with code {exit_code}",
+                (
+                    f"Cursor agent process exited with code {exit_code}"
+                    if agent_exc is None
+                    else f"Cursor agent ended abnormally: {str(agent_exc)[:400]}"
+                ),
                 stage=cur_stage,
                 detail={
                     "exit_code": exit_code,
@@ -350,15 +367,52 @@ def execute_task(task_id: str, *, job_id: int | None = None, fence: str | None =
                     "tools": evidence.tool_calls[:20],
                     "session_id": session_id or None,
                     "resumed": bool(resume_chat_id),
+                    "error": (str(agent_exc)[:300] if agent_exc else None),
                 },
             )
 
             if _cancelled(task_id):
+                if agent_exc is not None:
+                    raise agent_exc
                 return
 
             modified = agent.list_modified_files(
                 target, branch, before_snapshot=before_snapshot
             )
+            saw_write = bool(getattr(evidence, "saw_write", False))
+            if agent_exc is not None:
+                # Disconnect / crash after edits: keep changes approvable instead of failed.
+                if modified or saw_write:
+                    salvaged_disconnect = True
+                    err_short = str(agent_exc)[:500]
+                    if not modified and saw_write:
+                        # Prefer paths from stream evidence when snapshot/git lag.
+                        touched = [
+                            str(p)
+                            for p in (getattr(evidence, "files_touched", None) or [])
+                            if p and agent.TASK_FILE not in str(p)
+                        ]
+                        if touched:
+                            modified = touched
+                    agent_result = (
+                        "Agent ended abnormally (changes preserved in isolated workspace): "
+                        + err_short
+                    )
+                    task_events.record(
+                        task_id,
+                        "agent_salvaged",
+                        f"Salvaged {len(modified)} changed file(s) after agent failure",
+                        stage=cur_stage,
+                        detail={"files": modified[:50], "error": err_short[:300]},
+                    )
+                    log.warning(
+                        "Salvaging task %s after agent failure (%s file(s))",
+                        task_id,
+                        len(modified),
+                    )
+                else:
+                    raise agent_exc
+
             if modified:
                 tasks.update_task(task_id, modified_files=modified)
                 task_events.record(
@@ -427,6 +481,16 @@ def execute_task(task_id: str, *, job_id: int | None = None, fence: str | None =
             return
         ended = db.now()
         latest = tasks.get_task(task_id)
+        if tests_failed:
+            review_blocker = (
+                "Configured tests failed — review the test output carefully before approving."
+            )
+        elif salvaged_disconnect:
+            review_blocker = (
+                "Agent ended abnormally; workspace changes were preserved for your review."
+            )
+        else:
+            review_blocker = None
         won = tasks.cas_update(
             task_id,
             "running",
@@ -437,34 +501,38 @@ def execute_task(task_id: str, *, job_id: int | None = None, fence: str | None =
             ended_at=ended,
             last_activity_at=ended,
             modified_files=modified or (latest.get("modified_files") if latest else None),
-            blocker=(
-                "Configured tests failed — review the test output carefully before approving."
-                if tests_failed
-                else None
-            ),
+            blocker=review_blocker,
         )
         if not won:
             return
+        if salvaged_disconnect:
+            review_label = "Agent ended abnormally — changes preserved for review"
+        elif tests_failed:
+            review_label = "Coding complete — ready for review (tests failed)"
+        else:
+            review_label = "Coding complete — ready for review"
         task_events.record(
             task_id,
             "ready_for_review",
-            (
-                "Coding complete — ready for review (tests failed)"
-                if tests_failed
-                else "Coding complete — ready for review"
-            ),
+            review_label,
             stage="ready_for_review",
             detail={
                 "digest_prefix": digest[:16],
                 "files": len(modified or []),
                 "tests_failed": tests_failed,
+                "salvaged": salvaged_disconnect,
             },
         )
         audit.record(
             "execute_review",
             actor=sender,
             task_id=task_id,
-            detail={"digest_prefix": digest[:16], "dry_run": config.DRY_RUN, "branch": branch or None},
+            detail={
+                "digest_prefix": digest[:16],
+                "dry_run": config.DRY_RUN,
+                "branch": branch or None,
+                "salvaged": salvaged_disconnect,
+            },
         )
         if project_config.get("type") == "git" and project_config.get("apply_local", True):
             if project_config.get("allow_push"):
@@ -489,6 +557,10 @@ def execute_task(task_id: str, *, job_id: int | None = None, fence: str | None =
             preview = ", ".join(modified[:8])
             more = f" (+{len(modified) - 8} more)" if len(modified) > 8 else ""
             file_bits = f"\n\nFiles changed: {preview}{more}"
+        preserve_note = (
+            "Changes are in the isolated workspace only — your real project folder "
+            "is unchanged until you Approve & apply (open Activity)."
+        )
         if config.DRY_RUN:
             send_text(
                 sender,
@@ -496,24 +568,31 @@ def execute_task(task_id: str, *, job_id: int | None = None, fence: str | None =
                 "Say if you want a live run next.",
                 level="success",
             )
+        elif salvaged_disconnect:
+            send_text(
+                sender,
+                f"Coding on {project} stopped unexpectedly, but your edits were kept.\n\n"
+                f"{report[:1800]}{file_bits}\n\n"
+                f"{preserve_note}\n"
+                f"{next_step}",
+                level="warning",
+            )
         elif tests_failed:
             send_text(
                 sender,
                 f"Coding finished for {project}, but configured tests FAILED — "
                 "review the output before you approve.\n\n"
                 f"{report[:1800]}{file_bits}\n\n"
-                "Your real project folder is unchanged until you approve "
-                "(open Activity for the Approve & apply button).\n"
+                f"{preserve_note}\n"
                 f"{next_step}",
                 level="warning",
             )
         else:
             send_text(
                 sender,
-                f"Done — not stuck. Coding finished for {project}; waiting for your approval.\n\n"
+                f"Coding finished for {project} in an isolated workspace — ready for your approval.\n\n"
                 f"{report[:1800]}{file_bits}\n\n"
-                "Your real project folder is unchanged until you approve "
-                "(open Activity for the Approve & apply button).\n"
+                f"{preserve_note}\n"
                 f"{next_step}",
                 level="success",
             )

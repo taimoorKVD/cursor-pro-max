@@ -499,6 +499,9 @@ def test_activity_format_regexes_use_js_whitespace(tmp_path, monkeypatch):
     assert "(Write|Edit|Read|Grep|Glob|Shell|Delete)\\\\s+(.+)$/i" not in CHAT_HTML
     assert "activityInstructionPreview" in CHAT_HTML
     assert "projectDisplayName(t.project" in CHAT_HTML
+    assert "resolveReviewCta" in CHAT_HTML
+    assert "clearResolvedReviewCtas" in CHAT_HTML
+    assert "openProgressPanel()" in CHAT_HTML
 
 
 def test_status_recent_tasks_include_instruction(tmp_path, monkeypatch):

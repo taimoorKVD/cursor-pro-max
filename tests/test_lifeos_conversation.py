@@ -170,6 +170,8 @@ def test_execute_live_uses_agent_running_not_inferred_stages(tmp_path, monkeypat
         on_heartbeat=None,
         on_stream_event=None,
         evidence=None,
+        resume_chat_id=None,
+        **_kwargs,
     ):
         if on_pid:
             on_pid(7777)

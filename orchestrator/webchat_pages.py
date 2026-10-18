@@ -1580,16 +1580,23 @@ function add(m, {notify=false} = {}) {
     if (isReviewReadyMessage(m)) {
       const cta = document.createElement('div');
       cta.className = 'msg-review-cta';
+      cta.dataset.reviewCta = '1';
       const approve = document.createElement('button');
       approve.type = 'button';
       approve.className = 'activity-review-approve';
       approve.textContent = 'Approve & apply';
-      approve.addEventListener('click', () => send('approve and apply'));
+      approve.addEventListener('click', () => {
+        resolveReviewCta(cta, 'Approved');
+        send('approve and apply');
+      });
       const reject = document.createElement('button');
       reject.type = 'button';
       reject.className = 'activity-review-reject';
       reject.textContent = 'Reject';
-      reject.addEventListener('click', () => send('reject that'));
+      reject.addEventListener('click', () => {
+        resolveReviewCta(cta, 'Rejected');
+        send('reject that');
+      });
       cta.appendChild(approve);
       cta.appendChild(reject);
       col.appendChild(cta);
@@ -1646,11 +1653,30 @@ function add(m, {notify=false} = {}) {
 function isReviewReadyMessage(m) {
   if (!m || m.direction === 'in') return false;
   const text = String(m.text || '');
-  if ((m.level || '') === 'success' && /ready for your (review|approval)|waiting for your approval|Done — not stuck/i.test(text)) {
+  if ((m.level || '') === 'success' && /ready for your (review|approval)|waiting for your approval|Done — not stuck|Coding finished for /i.test(text)) {
+    return true;
+  }
+  if ((m.level || '') === 'warning' && /stopped unexpectedly|changes were kept|tests FAILED/i.test(text)
+      && /Approve & apply|unchanged until you|isolated workspace/i.test(text)) {
     return true;
   }
   return /ready for your review|approve and apply|Approve & apply/i.test(text)
-    && /unchanged until you approve|Isolated workspace only|waiting for your approval/i.test(text);
+    && /unchanged until you approve|Isolated workspace only|waiting for your approval|isolated workspace only/i.test(text);
+}
+function resolveReviewCta(cta, label) {
+  if (!cta || cta.dataset.reviewResolved === '1') return;
+  cta.dataset.reviewResolved = '1';
+  cta.replaceChildren();
+  const note = document.createElement('span');
+  note.className = 'msg-review-resolved';
+  note.textContent = label || 'Resolved';
+  cta.appendChild(note);
+}
+function clearResolvedReviewCtas(label) {
+  document.querySelectorAll('.msg-review-cta[data-review-cta="1"]').forEach((cta) => {
+    if (cta.dataset.reviewResolved === '1') return;
+    resolveReviewCta(cta, label || 'Resolved');
+  });
 }
 
 const progressPanel = document.getElementById('progressPanel');
@@ -1750,16 +1776,21 @@ if (activityDrawerBackdrop) {
 if (busyOpenProgress) {
   busyOpenProgress.addEventListener('click', () => openProgressPanel());
 }
-function wireApproveReject(btn, phrase) {
+function wireApproveReject(btn, phrase, resolvedLabel) {
   if (!btn) return;
-  btn.addEventListener('click', () => send(phrase));
+  btn.addEventListener('click', () => {
+    const label = resolvedLabel
+      || (/reject/i.test(phrase) ? 'Rejected' : 'Approved');
+    clearResolvedReviewCtas(label);
+    send(phrase);
+  });
 }
-wireApproveReject(activityApproveBtn, 'approve and apply');
-wireApproveReject(activityRejectBtn, 'reject that');
-wireApproveReject(bannerApproveBtn, 'approve and apply');
-wireApproveReject(bannerCommitApplyBtn, 'commit local and apply');
-wireApproveReject(bannerPushBtn, 'approve and push');
-wireApproveReject(bannerRejectBtn, 'reject that');
+wireApproveReject(activityApproveBtn, 'approve and apply', 'Approved');
+wireApproveReject(activityRejectBtn, 'reject that', 'Rejected');
+wireApproveReject(bannerApproveBtn, 'approve and apply', 'Approved');
+wireApproveReject(bannerCommitApplyBtn, 'commit local and apply', 'Approved');
+wireApproveReject(bannerPushBtn, 'approve and push', 'Approved');
+wireApproveReject(bannerRejectBtn, 'reject that', 'Rejected');
 function formatElapsed(sec) {
   sec = Math.max(0, Math.floor(sec || 0));
   if (sec < 60) return sec + 's';
@@ -2184,9 +2215,14 @@ async function refreshStatus() {
     if (!reviewTask && publishFailedScoped.length) reviewTask = publishFailedScoped[0];
     const dirtyBlock = !!(reviewTask && reviewTask.status === 'publish_failed'
       && /uncommitted changes/i.test(String(reviewTask.summary || reviewTask.blocker || '')));
-    setReviewBanner(!!reviewTask && !liveScoped.length, dirtyBlock ? 'dirty' : 'review');
+    const showReviewBanner = !!reviewTask && !liveScoped.length;
+    setReviewBanner(showReviewBanner, dirtyBlock ? 'dirty' : 'review');
+    if (!showReviewBanner) {
+      clearResolvedReviewCtas('Resolved');
+    }
     // Auto-focus a newly created live task (Cursor focuses the agent you just started).
     const seenBefore = _knownTaskIds.size > 0;
+    let openedForNewLive = false;
     for (const t of nextCache) {
       if (!_knownTaskIds.has(t.id)) {
         const isLive = t.status === 'queued' || t.status === 'running' || t.status === 'publishing';
@@ -2195,6 +2231,10 @@ async function refreshStatus() {
           _renderedEventIds = new Set();
           _lastProgressSig = '';
           focusTaskOnServer(t.id);
+          if (!openedForNewLive) {
+            openProgressPanel();
+            openedForNewLive = true;
+          }
         }
         _knownTaskIds.add(t.id);
       }
@@ -2224,7 +2264,7 @@ async function refreshStatus() {
     } else {
       busyEl.textContent = 'Working on your request…';
     }
-    // Do not auto-open the drawer (that jerks the UI). Refresh quietly while open or working.
+    // Refresh quietly while open or working; new live tasks open Activity above.
     if (progressOpen || projectActive || reviewTask) {
       await refreshProgress();
     } else {
@@ -2314,6 +2354,9 @@ async function send(text) {
   text = (text || '').trim();
   const attachIds = pendingAttachments.map((a) => a.id);
   if ((!text && !attachIds.length) || sending) return;
+  if (/^\s*(approve|reject|commit local and apply|apply locally)\b/i.test(text)) {
+    clearResolvedReviewCtas(/reject/i.test(text) ? 'Rejected' : 'Approved');
+  }
   sending = true;
   sendBtn.disabled = true;
   busy.classList.add('on');
