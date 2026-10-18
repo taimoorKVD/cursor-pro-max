@@ -23,10 +23,27 @@ $BootGraceSec = 15
 New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
 
 function Write-Log([string]$Message) {
-    try {
-        $line = "{0:u} {1}" -f (Get-Date).ToUniversalTime(), $Message
-        Add-Content -LiteralPath $ControlLog -Value $line -Encoding utf8
-    } catch { }
+    # Shared append: Add-Content fails with "Stream was not readable" / lock errors
+    # when another process (viewer, second supervisor, AV) has the log open.
+    $line = ("{0:u} {1}" -f (Get-Date).ToUniversalTime(), $Message) + [Environment]::NewLine
+    $bytes = [System.Text.Encoding]::UTF8.GetBytes($line)
+    for ($attempt = 0; $attempt -lt 6; $attempt++) {
+        $fs = $null
+        try {
+            $fs = [System.IO.File]::Open(
+                $ControlLog,
+                [System.IO.FileMode]::Append,
+                [System.IO.FileAccess]::Write,
+                [System.IO.FileShare]::ReadWrite
+            )
+            $fs.Write($bytes, 0, $bytes.Length)
+            return
+        } catch {
+            Start-Sleep -Milliseconds (40 * ($attempt + 1))
+        } finally {
+            if ($null -ne $fs) { $fs.Dispose() }
+        }
+    }
 }
 
 function Get-CodeStamp {

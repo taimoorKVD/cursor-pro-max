@@ -143,8 +143,17 @@ function Send-UrlChangeEmail([string]$PublicUrl, [string]$PreviousUrl) {
     }
     Write-Log "URL_EMAIL_TRIGGER $PublicUrl"
     try {
-        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $NotifyScript `
-            -PublicUrl $PublicUrl -PreviousUrl $PreviousUrl
+        # Empty PreviousUrl must not be passed: external powershell drops "" and
+        # leaves -PreviousUrl with no value (MissingArgument).
+        $notifyArgs = @(
+            "-NoProfile", "-ExecutionPolicy", "Bypass",
+            "-File", $NotifyScript,
+            "-PublicUrl", $PublicUrl
+        )
+        if (-not [string]::IsNullOrWhiteSpace($PreviousUrl)) {
+            $notifyArgs += @("-PreviousUrl", $PreviousUrl)
+        }
+        & powershell.exe @notifyArgs
         Write-Log "URL_EMAIL_DONE exit=$LASTEXITCODE"
     } catch {
         Write-Log "URL_EMAIL_ERROR $($_.Exception.Message)"
