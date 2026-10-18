@@ -695,6 +695,61 @@ def messages(request: Request, after: int = 0, project: str = "") -> JSONRespons
     )
 
 
+@router.post("/chat/feedback")
+async def feedback(request: Request) -> JSONResponse:
+    """Thumbs up/down on an outbound chat message (feeds learning outcomes)."""
+    if not _authed(request):
+        return _json({"error": "Unauthorized"}, 401)
+    data = await _read_json(request)
+    if data is None:
+        return _json({"error": "Bad request"}, 400)
+    rating = str(data.get("rating") or data.get("vote") or "").strip().lower()
+    message_id_raw = data.get("message_id") or data.get("id")
+    try:
+        message_id = int(message_id_raw) if message_id_raw is not None else None
+    except (TypeError, ValueError):
+        return _json({"error": "Invalid message_id"}, 400)
+
+    message_text = ""
+    project = _current_project()
+    if message_id is not None:
+        with db.DB_LOCK, db.connect() as c:
+            ensure_schema(c)
+            row = c.execute(
+                "SELECT id, direction, text, project FROM web_messages WHERE id=?",
+                (message_id,),
+            ).fetchone()
+        if not row:
+            return _json({"error": "Message not found"}, 404)
+        if row["direction"] != "out":
+            return _json({"error": "Feedback only applies to assistant messages"}, 400)
+        message_text = str(row["text"] or "")
+        if row["project"]:
+            project = str(row["project"])
+
+    task_id = None
+    try:
+        from orchestrator import session
+
+        task_id = (session.get(SENDER).get("active_task_id") or "") or None
+    except Exception:  # noqa: BLE001
+        task_id = None
+
+    from orchestrator import learning
+
+    ok = learning.record_feedback(
+        rating=rating,
+        sender=SENDER,
+        message_id=message_id,
+        message_text=message_text or str(data.get("text") or ""),
+        project=project,
+        task_id=task_id,
+    )
+    if not ok:
+        return _json({"error": "rating must be up or down"}, 400)
+    return _json({"ok": True, "rating": "up" if rating in {"up", "helpful", "good", "+1"} else "down"})
+
+
 @router.post("/chat/focus-task")
 async def focus_task(request: Request) -> JSONResponse:
     """Bind chat follow-ups (status/approve/cancel) to a selected Activity task."""

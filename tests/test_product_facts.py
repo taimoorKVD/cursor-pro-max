@@ -31,7 +31,9 @@ def test_faq_self_train():
         "are you able to train yourself based on every action and request?"
     )
     assert ans
-    assert "fine-tune" in ans.lower() or "don't" in ans.lower()
+    lowered = ans.lower()
+    assert "fine-tune" in lowered or "don't" in lowered
+    assert "playbook" in lowered or "not weight" in lowered or "sqlite" in lowered
 
 
 def test_how_it_works_intent():

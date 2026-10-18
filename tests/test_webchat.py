@@ -127,6 +127,21 @@ def test_projects_round_trip(tmp_path, monkeypatch):
     assert "what can i help" in after_clear[0]["text"].lower()
 
 
+def test_message_feedback_endpoint(tmp_path, monkeypatch):
+    client = _client(monkeypatch, tmp_path)
+    assert _login(client).status_code == 200
+    msgs = client.get("/chat/messages").json()["messages"]
+    assert msgs and msgs[0]["direction"] == "out"
+    mid = msgs[0]["id"]
+    up = client.post("/chat/feedback", json={"message_id": mid, "rating": "up"})
+    assert up.status_code == 200
+    assert up.json().get("ok") is True
+    bad = client.post("/chat/feedback", json={"message_id": mid, "rating": "meh"})
+    assert bad.status_code == 400
+    missing = client.post("/chat/feedback", json={"message_id": 999999, "rating": "down"})
+    assert missing.status_code == 404
+
+
 def test_clear_chat_clears_recent_activity(tmp_path, monkeypatch):
     client = _client(monkeypatch, tmp_path)
     assert _login(client).status_code == 200

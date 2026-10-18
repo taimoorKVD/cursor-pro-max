@@ -564,6 +564,18 @@ def publish(
             task_id=task["id"],
             detail={"action": action},
         )
+        try:
+            from orchestrator import learning
+
+            refreshed = {**task, "summary": detail[:4500], "status": "published"}
+            learning.record_outcome(
+                decision="published",
+                task=refreshed,
+                action=action,
+            )
+            learning.maybe_append_playbook(refreshed, action=action)
+        except Exception:  # noqa: BLE001
+            pass
         send_text(task["sender"], f"Done for task {task['id']}. {detail}", level="success")
     except Exception as exc:
         log.exception("Publication failed")
@@ -575,6 +587,18 @@ def publish(
             detail={"action": action, "error": str(exc)[:300]},
             ok=False,
         )
+        try:
+            from orchestrator import learning
+
+            learning.record_outcome(
+                decision="publish_failed",
+                task=task,
+                action=action,
+                summary_excerpt=str(exc)[:500],
+                detail={"error": str(exc)[:300]},
+            )
+        except Exception:  # noqa: BLE001
+            pass
         send_text(
             task["sender"],
             f"That didn't work for task {task['id']}:\n{str(exc)[:650]}\n\n"

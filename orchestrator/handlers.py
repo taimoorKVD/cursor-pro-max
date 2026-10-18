@@ -388,6 +388,19 @@ def _handle_inner(sender: str, body: str) -> None:
     )
     # Keep LLM phrasing only when we kept the LLM intent object.
     soft_reply = (llm.reply if llm and llm.intent is intent else None) or None
+    if llm and llm.intent and llm.intent.kind != intent.kind:
+        try:
+            from orchestrator import learning
+
+            learning.record_intent_correction(
+                message_text=body,
+                predicted_kind=llm.intent.kind,
+                corrected_kind=intent.kind,
+                sender=sender,
+                source="resolve_intent",
+            )
+        except Exception:  # noqa: BLE001
+            pass
 
     if intent.kind == "greet":
         send_text(
@@ -895,6 +908,17 @@ def _handle_inner(sender: str, body: str) -> None:
             return
         tasks.update_task(task["id"], status="rejected")
         audit.record("task_rejected", actor=sender, task_id=task["id"])
+        try:
+            from orchestrator import learning
+
+            learning.record_outcome(
+                decision="rejected",
+                task=task,
+                action="REJECT",
+                detail={"status_before": "review"},
+            )
+        except Exception:  # noqa: BLE001
+            pass
         send_text(
             sender,
             f"Okay - I rejected task {task['id']}. "
@@ -1113,6 +1137,17 @@ def _handle_inner(sender: str, body: str) -> None:
                 "digest_prefix": (task.get("content_digest") or "")[:16],
             },
         )
+        try:
+            from orchestrator import learning
+
+            learning.record_outcome(
+                decision="approved",
+                task=task,
+                action=action,
+                detail={"queued_publish": True},
+            )
+        except Exception:  # noqa: BLE001
+            pass
         if action == "APPLY":
             verb = "merging the changes into your local project"
         elif action == "PR":

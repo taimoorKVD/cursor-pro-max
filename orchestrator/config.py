@@ -90,6 +90,17 @@ class Settings:
         self.MAX_GROQ_CALLS_PER_DAY = int(os.getenv("MAX_GROQ_CALLS_PER_DAY", "300"))
         self.EXPOSE_API_DOCS = os.getenv("EXPOSE_API_DOCS", "false").lower() == "true"
         self.PROJECTS_STRICT = os.getenv("PROJECTS_STRICT", "true").lower() == "true"
+        # Closed-loop learning (outcomes / playbook / intent few-shots) — not model fine-tuning.
+        self.LEARNING_ENABLED = os.getenv("LEARNING_ENABLED", "true").lower() == "true"
+        self.LEARNING_PLAYBOOK_MAX_RULES = max(
+            1, min(50, int(os.getenv("LEARNING_PLAYBOOK_MAX_RULES", "12")))
+        )
+        self.LEARNING_PAST_SUCCESSES_MAX = max(
+            0, min(20, int(os.getenv("LEARNING_PAST_SUCCESSES_MAX", "5")))
+        )
+        self.LEARNING_FEWSHOT_MAX = max(
+            0, min(30, int(os.getenv("LEARNING_FEWSHOT_MAX", "8")))
+        )
 
     @staticmethod
     def _path(name: str, default: str) -> Path:

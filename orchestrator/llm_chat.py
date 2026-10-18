@@ -298,6 +298,14 @@ def _system_prompt(registry: dict[str, Any], sender: str) -> str:
                 task_bits = "\n\n" + task_facts(rows)
         except Exception:  # noqa: BLE001
             task_bits = ""
+    fewshot_bits = ""
+    try:
+        from orchestrator import learning
+
+        fewshot_bits = learning.format_intent_fewshot_section()
+    except Exception:  # noqa: BLE001
+        fewshot_bits = ""
+    fewshot_block = f"\n\n{fewshot_bits}" if fewshot_bits else ""
     return (
         "You are the conversational brain for a coding orchestrator chat. "
         "Users talk casually (like ChatGPT). You receive recent conversation "
@@ -314,7 +322,8 @@ def _system_prompt(registry: dict[str, Any], sender: str) -> str:
         f"{task_bits}"
         f"{pending_bits}"
         f"{memory_bits}"
-        f"{session_bits}\n\n"
+        f"{session_bits}"
+        f"{fewshot_block}\n\n"
         "Return ONLY a JSON object with keys:\n"
         "- kind: one of greet, thanks, help, how_it_works, cancel, projects, "
         "scan_projects, set_projects_root, show_projects_root, register_project, "

@@ -159,9 +159,20 @@ def execute_task(task_id: str, *, job_id: int | None = None, fence: str | None =
         # Snapshot after attachments so copied images are not reported as agent edits.
         before_snapshot = workspace.file_snapshot(target) if not branch else None
 
+        learned = ""
+        try:
+            from orchestrator import learning
+
+            learned = learning.format_playbook_section(
+                str(task.get("project") or ""),
+                instruction=str(task.get("instruction") or ""),
+            )
+        except Exception:  # noqa: BLE001
+            learned = ""
         prompt = agent.build_prompt(
             task["instruction"],
             project_instructions=str(project_config.get("instructions") or ""),
+            learned_memory=learned,
             attachment_paths=attach_paths,
         )
         if reuse_workspace:

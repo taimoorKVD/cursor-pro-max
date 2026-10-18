@@ -324,12 +324,14 @@ def build_prompt(
     instruction: str,
     *,
     project_instructions: str = "",
+    learned_memory: str = "",
     attachment_paths: list[str] | None = None,
 ) -> str:
     """Lead with the real user task so the model cannot miss it.
 
     ``attachment_paths`` are workspace-relative image paths (Cursor CLI can
     inspect image files referenced in the prompt).
+    ``learned_memory`` is optional playbook / past-success text from learning.
     """
     task = (instruction or "").strip()
     task = re.sub(
@@ -354,6 +356,8 @@ def build_prompt(
     ]
     if project_instructions.strip():
         parts.extend(["", "PROJECT NOTES:", project_instructions.strip()])
+    if learned_memory.strip():
+        parts.extend(["", learned_memory.strip()])
     paths = [p.strip().replace("\\", "/") for p in (attachment_paths or []) if p and str(p).strip()]
     if paths:
         from orchestrator.attachments import prompt_section

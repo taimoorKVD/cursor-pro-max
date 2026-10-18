@@ -20,6 +20,9 @@ How this orchestrator actually works (facts — do not invent alternatives):
   agent prompt as workspace-relative paths (Cursor-style), not uploaded to a cloud vision API by default.
 - Chat history and last-work memory can survive restarts (SQLite). The model itself is
   not fine-tuned from your chats; durable memory + session/history are how continuity works.
+- Closed-loop learning (when enabled): approve/reject/thumbs outcomes update a per-project
+  playbook and intent few-shots injected into the next agent/classifier run — still not
+  weight fine-tuning.
 - Self-improve means registering this orchestrator repo as a project, letting the agent
   change an isolated copy, then approving apply — not automatic model training.
 - Status / remaining / done / changes answers must come from task evidence on the server
@@ -73,9 +76,10 @@ _FAQ: list[tuple[re.Pattern[str], str]] = [
             re.I,
         ),
         "I don't fine-tune a model from your chats. Continuity comes from durable chat "
-        "history, session (active project/task), and last-work memory in SQLite so retries "
-        "and clarifications survive restarts. Improving the product itself means running "
-        "coding tasks on this orchestrator repo and approving apply — not automatic training.",
+        "history, session (active project/task), and last-work memory in SQLite. "
+        "Approve/reject and thumbs also feed a project playbook and intent corrections "
+        "into later runs — still not weight training. Improving the product code itself "
+        "means running coding tasks on this orchestrator repo and approving apply.",
     ),
     (
         re.compile(

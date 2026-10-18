@@ -702,6 +702,34 @@ function setPill(state) {
   if (state) pill.classList.add(state);
 }
 
+async function sendMessageFeedback(m, rating, activeBtn, otherBtn) {
+  if (!m || m.id == null) {
+    showToast('Thanks for the feedback');
+    return;
+  }
+  try {
+    const r = await fetch('/chat/feedback', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({message_id: m.id, rating}),
+    });
+    if (r.status === 401) { location.reload(); return; }
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      showToast(j.error || 'Could not save feedback');
+      return;
+    }
+    if (activeBtn) {
+      activeBtn.disabled = true;
+      activeBtn.style.opacity = '1';
+    }
+    if (otherBtn) otherBtn.disabled = true;
+    showToast(rating === 'up' ? 'Thanks for the feedback' : 'Thanks — noted');
+  } catch (e) {
+    showToast('Could not save feedback');
+  }
+}
+
 function showToast(msg, ms) {
   toast.textContent = msg;
   // Keep toast above the iPhone keyboard (visualViewport shrinks when kb opens).
@@ -1397,13 +1425,13 @@ function add(m, {notify=false} = {}) {
     up.title = 'Helpful';
     up.setAttribute('aria-label', 'Helpful');
     up.innerHTML = ICON_UP;
-    up.addEventListener('click', () => showToast('Thanks for the feedback'));
+    up.addEventListener('click', () => sendMessageFeedback(m, 'up', up, down));
     const down = document.createElement('button');
     down.type = 'button';
     down.title = 'Not helpful';
     down.setAttribute('aria-label', 'Not helpful');
     down.innerHTML = ICON_DOWN;
-    down.addEventListener('click', () => showToast('Thanks — noted'));
+    down.addEventListener('click', () => sendMessageFeedback(m, 'down', down, up));
     const more = document.createElement('button');
     more.type = 'button';
     more.title = 'More';
