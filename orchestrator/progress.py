@@ -5,6 +5,7 @@ Never invents file changes, timings, or test results — only cites task rows an
 from __future__ import annotations
 
 import json
+import re
 import time
 from typing import Any
 
@@ -67,6 +68,13 @@ def snapshot(task: dict[str, Any]) -> dict[str, Any]:
     ):
         current_label = task_events.AGENT_STARTING_DETAIL
     events = task_events.list_events(task["id"], limit=50)
+    publish_steps = _publish_steps_from_events(events)
+    summary_text = (task.get("summary") or "")[:2000]
+    # Prefer structured completion report steps when the task already finished.
+    if not publish_steps and summary_text.startswith("=== Task completion ==="):
+        parsed = parse_completion_report(summary_text)
+        if parsed:
+            publish_steps = parsed["steps"]
     return {
         "task_id": task["id"],
         "project": task.get("project"),
@@ -85,7 +93,8 @@ def snapshot(task: dict[str, Any]) -> dict[str, Any]:
         "exit_code": task.get("exit_code"),
         "blocker": task.get("blocker"),
         "workspace": task.get("workspace"),
-        "summary": (task.get("summary") or "")[:2000],
+        "summary": summary_text,
+        "publish_steps": publish_steps,
         "events": [
             {
                 "id": e["id"],
@@ -97,6 +106,44 @@ def snapshot(task: dict[str, Any]) -> dict[str, Any]:
             for e in events
         ],
     }
+
+
+def _publish_steps_from_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Collapse local_commit + publish_step events into a timeline for Activity UI."""
+    steps: list[dict[str, Any]] = []
+    seen_titles: set[str] = set()
+    for ev in events:
+        et = ev.get("event_type") or ""
+        detail = ev.get("detail") if isinstance(ev.get("detail"), dict) else {}
+        if et == "local_commit":
+            title = str(detail.get("title") or "Committing local changes")
+            body = str(detail.get("detail") or ev.get("message") or "")
+        elif et == "publish_step":
+            title = str(detail.get("title") or "").strip()
+            body = str(detail.get("detail") or ev.get("message") or "").strip()
+            if not title and ":" in body:
+                title, body = [p.strip() for p in body.split(":", 1)]
+            if not title:
+                continue
+            # Hide internal worktree commit when a local-commit prelude is present.
+            if title == "Committing approved changes" and any(
+                s.get("title") == "Committing local changes" for s in steps
+            ):
+                continue
+        else:
+            continue
+        key = title.lower()
+        if key in seen_titles:
+            continue
+        seen_titles.add(key)
+        steps.append(
+            {
+                "title": title,
+                "detail": body,
+                "status": str(detail.get("status") or "completed"),
+            }
+        )
+    return steps
 
 
 def reply_status(task: dict[str, Any]) -> str:
@@ -242,6 +289,9 @@ def reply_done(task: dict[str, Any]) -> str:
             'Say "approve and push", "apply locally", "create a pull request", or "reject that".'
         )
     if status == "published":
+        summary = (task.get("summary") or "").strip()
+        if summary.startswith("=== Task completion ==="):
+            return summary
         return f"Yes — task {task['id']} on {task['project']} was published."
     if status == "failed":
         blocker = (task.get("blocker") or task.get("summary") or "unknown error")[:400]
@@ -438,3 +488,138 @@ def facts_for_llm(task: dict[str, Any]) -> str:
 
 def refresh_task(task_id: str) -> dict[str, Any] | None:
     return tasks.get_task(task_id)
+
+
+# Stable markers so webchat can render a timeline card without guessing prose.
+_COMPLETION_BEGIN = "=== Task completion ==="
+_COMPLETION_END = "=== End ==="
+
+
+def format_completion_report(
+    *,
+    task_id: str,
+    title: str,
+    steps: list[dict[str, Any]],
+    status_label: str = "Completed",
+    footnotes: list[str] | None = None,
+) -> str:
+    """Build a detailed step timeline for publish/apply completion (chat + web UI).
+
+    ``steps`` items: ``{title, detail, status}`` where status is
+    ``completed`` | ``in_progress`` | ``ready`` | ``failed``.
+    """
+    lines = [
+        _COMPLETION_BEGIN,
+        f"Task {task_id}",
+        f"Status: {status_label}",
+        (title or "").strip() or "Task finished.",
+        "",
+    ]
+    for i, step in enumerate(steps, start=1):
+        st = (step.get("status") or "completed").strip().lower()
+        # ASCII markers stay reliable on Windows consoles and WhatsApp clients.
+        mark = {
+            "completed": "[done]",
+            "in_progress": "[live]",
+            "ready": "[ ]",
+            "failed": "[fail]",
+        }.get(st, "[done]")
+        title_s = (step.get("title") or f"Step {i}").strip()
+        detail_s = (step.get("detail") or "").strip()
+        lines.append(f"{i}. {mark} {title_s}")
+        if detail_s:
+            lines.append(f"   {detail_s}")
+    notes = [n.strip() for n in (footnotes or []) if n and str(n).strip()]
+    if notes:
+        lines.append("")
+        for note in notes:
+            lines.append(note)
+    lines.append(_COMPLETION_END)
+    return "\n".join(lines)
+
+
+def parse_completion_report(text: str) -> dict[str, Any] | None:
+    """Parse a completion report produced by ``format_completion_report``."""
+    raw = (text or "").strip()
+    if not raw.startswith(_COMPLETION_BEGIN) or _COMPLETION_END not in raw:
+        return None
+    body = raw[len(_COMPLETION_BEGIN) :].split(_COMPLETION_END, 1)[0].strip()
+    lines = [ln.rstrip() for ln in body.splitlines()]
+    if len(lines) < 3:
+        return None
+    task_line = lines[0].strip()
+    status_line = lines[1].strip()
+    title = lines[2].strip()
+    task_id = ""
+    if task_line.lower().startswith("task "):
+        task_id = task_line[5:].strip()
+    status_label = status_line
+    if status_line.lower().startswith("status:"):
+        status_label = status_line.split(":", 1)[1].strip() or "Completed"
+    steps: list[dict[str, Any]] = []
+    footnotes: list[str] = []
+    i = 3
+    while i < len(lines):
+        ln = lines[i].strip()
+        if not ln:
+            i += 1
+            # Blank lines before any step are spacing; after steps they start footnotes.
+            if steps:
+                while i < len(lines):
+                    rest = lines[i].strip()
+                    if rest:
+                        footnotes.append(rest)
+                    i += 1
+                break
+            continue
+        m = re.match(
+            r"^(\d+)\.\s*(?:\[(done|live|fail| )\]|([✓●○✗]))\s+(.+)$",
+            ln,
+        )
+        if not m:
+            if steps:
+                footnotes.append(ln)
+                i += 1
+                continue
+            i += 1
+            continue
+        ascii_mark = (m.group(2) or "").strip().lower()
+        uni_mark = m.group(3) or ""
+        step_title = m.group(4).strip()
+        if ascii_mark == "done" or uni_mark == "✓":
+            status = "completed"
+        elif ascii_mark == "live" or uni_mark == "●":
+            status = "in_progress"
+        elif ascii_mark == "fail" or uni_mark == "✗":
+            status = "failed"
+        elif ascii_mark == "" or uni_mark == "○":
+            status = "ready"
+        else:
+            status = "completed"
+        detail = ""
+        if i + 1 < len(lines) and lines[i + 1].startswith("   "):
+            detail = lines[i + 1].strip()
+            i += 1
+        steps.append({"title": step_title, "detail": detail, "status": status})
+        i += 1
+    if not steps:
+        return None
+    return {
+        "task_id": task_id,
+        "status_label": status_label,
+        "title": title,
+        "steps": steps,
+        "footnotes": footnotes,
+    }
+
+
+def publish_action_title(action: str) -> str:
+    """Human title for a publish/apply completion card."""
+    key = (action or "").upper()
+    return {
+        "APPLY": "Apply changes to project.",
+        "PUSH": "Approve, push, and apply to project.",
+        "PR": "Open pull request and apply to project.",
+        "DEPLOY": "Run configured deploy command.",
+        "COMMIT_APPLY": "Commit local changes and apply to project.",
+    }.get(key, "Publish task changes.")

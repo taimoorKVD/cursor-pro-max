@@ -1578,7 +1578,8 @@ function add(m, {notify=false} = {}) {
   meta.appendChild(time);
   const bubble = document.createElement('div');
   bubble.className = 'msg-bubble ' + (incoming ? 'user' : 'agent');
-  if (!incoming && LEVEL_LABEL[level]) {
+  const completion = (!incoming && m.text) ? parseCompletionReport(m.text) : null;
+  if (!incoming && LEVEL_LABEL[level] && !completion) {
     const badge = document.createElement('div');
     badge.className = 'msg-level ' + level;
     if (level === 'success') badge.innerHTML = ICON_CHECK;
@@ -1612,10 +1613,15 @@ function add(m, {notify=false} = {}) {
   }
   const showText = (m.text || '') && !(atts.length && m.text === '[Image attached]');
   if (showText) {
-    const body = document.createElement('div');
-    body.className = 'msg-bubble-text';
-    body.textContent = m.text;
-    bubble.appendChild(body);
+    if (completion) {
+      bubble.classList.add('has-completion');
+      bubble.appendChild(renderCompletionCard(completion));
+    } else {
+      const body = document.createElement('div');
+      body.className = 'msg-bubble-text';
+      body.textContent = m.text;
+      bubble.appendChild(body);
+    }
   }
   col.appendChild(meta);
   col.appendChild(bubble);
@@ -1693,6 +1699,107 @@ function add(m, {notify=false} = {}) {
   return true;
 }
 
+function parseCompletionReport(text) {
+  const raw = String(text || '').trim();
+  if (!raw.startsWith('=== Task completion ===') || !raw.includes('=== End ===')) return null;
+  const body = raw.slice('=== Task completion ==='.length).split('=== End ===')[0].trim();
+  const lines = body.split(/\r?\n/);
+  if (lines.length < 3) return null;
+  let taskId = '';
+  if (/^Task\s+/i.test(lines[0])) taskId = lines[0].replace(/^Task\s+/i, '').trim();
+  let statusLabel = lines[1] || 'Completed';
+  if (/^Status:\s*/i.test(statusLabel)) statusLabel = statusLabel.replace(/^Status:\s*/i, '').trim();
+  const title = (lines[2] || '').trim();
+  const steps = [];
+  const footnotes = [];
+  for (let i = 3; i < lines.length; i++) {
+    const ln = lines[i];
+    if (!ln.trim()) {
+      if (!steps.length) continue;
+      for (let j = i + 1; j < lines.length; j++) {
+        if (lines[j].trim()) footnotes.push(lines[j].trim());
+      }
+      break;
+    }
+    const m = ln.match(/^(\d+)\.\s*(?:\[(done|live|fail| )\]|([✓●○✗]))\s+(.+)$/);
+    if (!m) {
+      if (steps.length && ln.trim()) footnotes.push(ln.trim());
+      continue;
+    }
+    const ascii = (m[2] || '').toLowerCase();
+    const uni = m[3] || '';
+    let status = 'completed';
+    if (ascii === 'done' || uni === '✓') status = 'completed';
+    else if (ascii === 'live' || uni === '●') status = 'in_progress';
+    else if (ascii === 'fail' || uni === '✗') status = 'failed';
+    else if (ascii === '' || uni === '○') status = 'ready';
+    let detail = '';
+    if (i + 1 < lines.length && /^\s{3}\S/.test(lines[i + 1])) {
+      detail = lines[i + 1].trim();
+      i += 1;
+    }
+    steps.push({title: m[4].trim(), detail, status});
+  }
+  if (!steps.length) return null;
+  return {taskId, statusLabel, title, steps, footnotes};
+}
+function renderCompletionCard(report) {
+  const card = document.createElement('div');
+  card.className = 'msg-completion';
+  const head = document.createElement('div');
+  head.className = 'msg-completion-head';
+  const idEl = document.createElement('strong');
+  idEl.className = 'msg-completion-id';
+  idEl.textContent = report.taskId ? ('Task ' + report.taskId) : 'Task';
+  const badge = document.createElement('span');
+  const st = String(report.statusLabel || 'Completed').toLowerCase();
+  badge.className = 'msg-completion-badge'
+    + (st.includes('fail') ? ' failed' : (st.includes('progress') ? ' progress' : ' done'));
+  badge.textContent = report.statusLabel || 'Completed';
+  head.appendChild(idEl);
+  head.appendChild(badge);
+  card.appendChild(head);
+  if (report.title) {
+    const title = document.createElement('p');
+    title.className = 'msg-completion-title';
+    title.textContent = report.title;
+    card.appendChild(title);
+  }
+  const ol = document.createElement('ol');
+  ol.className = 'msg-completion-steps';
+  report.steps.forEach((step) => {
+    const li = document.createElement('li');
+    li.className = 'msg-completion-step ' + (step.status || 'completed');
+    const mark = document.createElement('span');
+    mark.className = 'msg-completion-mark';
+    mark.setAttribute('aria-hidden', 'true');
+    const body = document.createElement('div');
+    body.className = 'msg-completion-step-body';
+    const name = document.createElement('strong');
+    name.textContent = step.title || 'Step';
+    body.appendChild(name);
+    if (step.detail) {
+      const detail = document.createElement('span');
+      detail.textContent = step.detail;
+      body.appendChild(detail);
+    }
+    li.appendChild(mark);
+    li.appendChild(body);
+    ol.appendChild(li);
+  });
+  card.appendChild(ol);
+  if (report.footnotes && report.footnotes.length) {
+    const notes = document.createElement('div');
+    notes.className = 'msg-completion-notes';
+    report.footnotes.forEach((n) => {
+      const p = document.createElement('p');
+      p.textContent = n;
+      notes.appendChild(p);
+    });
+    card.appendChild(notes);
+  }
+  return card;
+}
 function isReviewReadyMessage(m) {
   if (!m || m.direction === 'in') return false;
   const text = String(m.text || '');
@@ -1951,6 +2058,7 @@ function setIdleCurrentActivity() {
   if (progressMeta) progressMeta.textContent = '';
   if (progressEvents) {
     progressEvents.innerHTML = '<li class="work-feed-item empty">No activity yet</li>';
+    delete progressEvents.dataset.publishSig;
   }
   if (progressRail) {
     progressRail.innerHTML = '';
@@ -2041,6 +2149,10 @@ function renderActivityHistory(tasks, activeId) {
 }
 function appendFeedItems(evs, {replace}) {
   if (!progressEvents) return;
+  if (progressEvents.dataset.publishSig) {
+    delete progressEvents.dataset.publishSig;
+    replace = true;
+  }
   if (replace) {
     progressEvents.innerHTML = '';
     _renderedEventIds = new Set();
@@ -2109,18 +2221,21 @@ async function refreshProgress() {
       || /^(Read|Write|Edit|Grep|Glob|Shell|Agent|Cancel)/i.test(e.message || '')
     );
     const feed = stream.length ? stream : evs;
+    const publishSteps = Array.isArray(t.publish_steps) ? t.publish_steps : [];
     const label = t.current_label || t.execution_stage || 'Working';
     const active = t.status === 'queued' || t.status === 'running' || t.status === 'publishing';
     const needsReview = t.status === 'review';
     const isPublished = t.status === 'published';
     const latestMsg = feed.length ? (feed[feed.length - 1].message || '') : '';
-    const headSig = [t.task_id, t.status, t.execution_stage, label, latestMsg, _inflightCount].join('|');
+    const stepsSig = publishSteps.map(s => (s.title || '') + ':' + (s.status || '')).join('|');
+    const headSig = [t.task_id, t.status, t.execution_stage, label, latestMsg, stepsSig, _inflightCount].join('|');
     const taskChanged = _lastProgressSig.split('|')[0] !== String(t.task_id || '');
-    progressPanel.classList.toggle('idle', !active && !needsReview);
+    progressPanel.classList.toggle('idle', !active && !needsReview && !(isPublished && publishSteps.length));
     progressPanel.classList.toggle('needs-review', needsReview);
     if (progressLiveBadge) {
-      progressLiveBadge.hidden = !active && !needsReview;
+      progressLiveBadge.hidden = !active && !needsReview && !(isPublished && publishSteps.length);
       if (needsReview) progressLiveBadge.innerHTML = '<span class="work-live-dot" aria-hidden="true"></span>Review';
+      else if (isPublished && publishSteps.length) progressLiveBadge.innerHTML = '<span class="work-live-dot" aria-hidden="true"></span>Done';
       else if (active) progressLiveBadge.innerHTML = '<span class="work-live-dot" aria-hidden="true"></span>Live';
     }
     if (activityReviewActions) activityReviewActions.hidden = !needsReview;
@@ -2129,15 +2244,24 @@ async function refreshProgress() {
       _lastProgressSig = headSig;
       progressStageLabel.textContent = isPublished
         ? 'Published'
-        : (needsReview ? 'Ready for your approval' : label);
+        : (t.status === 'publishing'
+          ? 'Applying your approval'
+          : (needsReview ? 'Ready for your approval' : label));
       const latest = formatActivity(latestMsg || stageHint(t.execution_stage, t.status));
-      progressNow.innerHTML = isPublished
-        ? 'Done — changes are in your project folder. Nothing left to approve.'
-        : (needsReview
-          ? 'Coding finished — tap Approve &amp; apply below (project folder unchanged until then).'
-          : (latest.path
-            ? (latest.label ? (escapeHtml(latest.label) + ' · <code>' + escapeHtml(latest.path) + '</code>') : ('<code>' + escapeHtml(latest.path) + '</code>'))
-            : escapeHtml(latest.label || stageHint(t.execution_stage, t.status))));
+      if (publishSteps.length && (t.status === 'publishing' || isPublished)) {
+        const last = publishSteps[publishSteps.length - 1];
+        progressNow.textContent = (last && last.title)
+          ? ((isPublished ? 'Completed · ' : 'In progress · ') + last.title)
+          : (isPublished ? 'Done — changes are in your project folder.' : 'Applying changes…');
+      } else {
+        progressNow.innerHTML = isPublished
+          ? 'Done — changes are in your project folder. Nothing left to approve.'
+          : (needsReview
+            ? 'Coding finished — tap Approve &amp; apply below (project folder unchanged until then).'
+            : (latest.path
+              ? (latest.label ? (escapeHtml(latest.label) + ' · <code>' + escapeHtml(latest.path) + '</code>') : ('<code>' + escapeHtml(latest.path) + '</code>'))
+              : escapeHtml(latest.label || stageHint(t.execution_stage, t.status))));
+      }
       if (progressMeta) {
         let meta = (t.project || '') + (t.task_id ? (' · ' + t.task_id) : '');
         if (_inflightCount > 1) meta += ' · ' + _inflightCount + ' live';
@@ -2146,8 +2270,37 @@ async function refreshProgress() {
       }
       renderRail(t.execution_stage, t.status);
     }
-    appendFeedItems(feed, {replace: taskChanged});
+    if (publishSteps.length && (t.status === 'publishing' || isPublished)) {
+      const hasLocal = publishSteps.some(s => /committing local changes/i.test(s.title || ''));
+      renderPublishStepsFeed(publishSteps, {
+        taskId: t.task_id,
+        statusLabel: isPublished ? 'Completed' : 'In Progress',
+        title: hasLocal
+          ? 'Commit local changes and apply to project.'
+          : 'Apply changes to project.',
+      });
+    } else {
+      appendFeedItems(feed, {replace: taskChanged});
+    }
   } catch (e) { noteTransportFail(); }
+}
+function renderPublishStepsFeed(steps, meta) {
+  if (!progressEvents) return;
+  const sig = JSON.stringify({steps, meta});
+  if (progressEvents.dataset.publishSig === sig) return;
+  progressEvents.dataset.publishSig = sig;
+  progressEvents.innerHTML = '';
+  _renderedEventIds = new Set();
+  const wrap = document.createElement('li');
+  wrap.className = 'work-feed-item publish-steps-item';
+  wrap.appendChild(renderCompletionCard({
+    taskId: (meta && meta.taskId) || '',
+    statusLabel: (meta && meta.statusLabel) || 'In Progress',
+    title: (meta && meta.title) || '',
+    steps: steps || [],
+    footnotes: [],
+  }));
+  progressEvents.appendChild(wrap);
 }
 function setReviewBanner(on, mode) {
   if (!reviewBanner) return;

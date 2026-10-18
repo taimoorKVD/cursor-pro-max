@@ -1,6 +1,7 @@
 """Inbound chat handling - natural language first, classic commands still work."""
 from __future__ import annotations
 
+import re
 import uuid
 
 from orchestrator import (
@@ -1019,8 +1020,9 @@ def _handle_inner(sender: str, body: str) -> None:
             actor=sender,
             detail={"project": resolved, "action": action},
         )
-        send_text(sender, detail, level="success")
         if action == "COMMIT_APPLY":
+            # Keep a short ack; the final publish reply will show the full step timeline.
+            send_text(sender, detail, level="info")
             if not task or task.get("status") not in {"review", "publish_failed"}:
                 send_text(
                     sender,
@@ -1029,6 +1031,25 @@ def _handle_inner(sender: str, body: str) -> None:
                     level="info",
                 )
                 return
+            try:
+                # Prefer the screenshot-style "Found N local change(s)…" detail when present.
+                prelude = detail
+                m = re.search(
+                    r"Committed\s+(\d+)\s+local change\(s\)\s+on\s+(\S+)",
+                    detail,
+                    re.I,
+                )
+                if m:
+                    prelude = f"Found {m.group(1)} local change(s) on branch {m.group(2)}."
+                task_events.record(
+                    task["id"],
+                    "local_commit",
+                    prelude[:2000],
+                    stage="publishing",
+                    detail={"title": "Committing local changes", "detail": prelude},
+                )
+            except Exception:  # noqa: BLE001
+                pass
             # Re-enter approve as APPLY after the tree is clean (never spawn a coding task).
             intent = converse.Intent(
                 kind="approve",
@@ -1037,6 +1058,7 @@ def _handle_inner(sender: str, body: str) -> None:
                 raw=intent.raw,
             )
         else:
+            send_text(sender, detail, level="success")
             if task and task.get("status") in {"review", "publish_failed"}:
                 send_text(
                     sender,

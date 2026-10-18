@@ -42,7 +42,11 @@ def _pr_body(task: dict) -> str:
     instruction = (task.get("instruction") or "").strip() or "(no instruction recorded)"
     summary = (task.get("summary") or "").strip()
     # Prefer the review report; drop prior publish chatter if re-running PR.
-    if summary.startswith("Committed ") or summary.startswith("Done for"):
+    if (
+        summary.startswith("Committed ")
+        or summary.startswith("Done for")
+        or summary.startswith("=== Task completion ===")
+    ):
         summary = ""
     lines = [
         "## Summary",
@@ -428,6 +432,41 @@ def _worktree_clean(target: Path) -> bool:
     return status.returncode == 0 and not lines
 
 
+def _record_publish_step(
+    task_id: str,
+    title: str,
+    detail: str,
+    *,
+    status: str = "completed",
+) -> None:
+    from orchestrator import task_events
+
+    task_events.record(
+        task_id,
+        "publish_step",
+        f"{title}: {detail}"[:2000],
+        stage="publishing",
+        detail={"title": title, "detail": detail, "status": status},
+    )
+
+
+def _local_commit_prelude(task_id: str) -> dict | None:
+    """If commit-local-and-apply ran first, reuse that evidence as step 1."""
+    from orchestrator import task_events
+
+    for ev in reversed(task_events.list_events(task_id, limit=40)):
+        if ev.get("event_type") != "local_commit":
+            continue
+        detail = ev.get("detail") if isinstance(ev.get("detail"), dict) else {}
+        return {
+            "title": "Committing local changes",
+            "detail": (detail.get("detail") or ev.get("message") or "").strip()
+            or "Local WIP committed.",
+            "status": "completed",
+        }
+    return None
+
+
 def publish(
     task: dict,
     project_config: dict,
@@ -437,12 +476,16 @@ def publish(
     fence: str | None = None,
 ) -> None:
     from orchestrator import config as cfg
+    from orchestrator import progress
     from orchestrator import queue
 
     if job_id is not None and fence and not queue.fence_matches(job_id, fence):
         return
     target = Path(task["workspace"])
     try:
+        steps: list[dict] = []
+        footnotes: list[str] = []
+        report_action = action
         if action == "DEPLOY":
             if not getattr(cfg, "DEPLOY_ENABLED", False):
                 raise RuntimeError(
@@ -453,9 +496,35 @@ def publish(
             result = _run(command, cwd=str(target), timeout=600)
             if result.returncode:
                 raise RuntimeError((result.stderr + result.stdout)[-850:])
-            detail = (
+            deploy_detail = (
                 "Deployment command exited successfully. "
                 "Independently verify running service, health, and version."
+            )
+            steps.append(
+                {
+                    "title": "Running deploy command",
+                    "detail": deploy_detail,
+                    "status": "completed",
+                }
+            )
+            _record_publish_step(task["id"], "Running deploy command", deploy_detail)
+            steps.append(
+                {
+                    "title": "Finalizing",
+                    "detail": "Updating project state and confirming success.",
+                    "status": "completed",
+                }
+            )
+            _record_publish_step(
+                task["id"],
+                "Finalizing",
+                "Updating project state and confirming success.",
+            )
+            detail = progress.format_completion_report(
+                task_id=task["id"],
+                title=progress.publish_action_title(action),
+                steps=steps,
+                status_label="Completed",
             )
         else:
             # PUSH, APPLY, or PR — commit only when the review digest still matches.
@@ -517,9 +586,37 @@ def publish(
                     "Nothing to do: allow_push is off and apply_local is off for this project."
                 )
 
+            local_prelude = _local_commit_prelude(task["id"])
+            commit_apply_flow = bool(local_prelude and action == "APPLY")
+            if commit_apply_flow:
+                report_action = "COMMIT_APPLY"
+                steps.append(local_prelude)
+
+            commit_detail = f"Committed {sha} on {task['branch']}."
+            _record_publish_step(task["id"], "Committing approved changes", commit_detail)
+            # Commit-local-and-apply cards match the operator timeline (local → backup →
+            # apply → finalize). The worktree approval commit is still recorded above.
+            if not commit_apply_flow:
+                steps.append(
+                    {
+                        "title": "Committing approved changes",
+                        "detail": commit_detail,
+                        "status": "completed",
+                    }
+                )
+
             if do_push:
                 try:
-                    parts.append(_push_branch(task, target))
+                    push_msg = _push_branch(task, target)
+                    parts.append(push_msg)
+                    steps.append(
+                        {
+                            "title": "Pushing branch",
+                            "detail": push_msg,
+                            "status": "completed",
+                        }
+                    )
+                    _record_publish_step(task["id"], "Pushing branch", push_msg)
                 except Exception as exc:
                     errors.append(f"Push failed: {exc}")
 
@@ -527,11 +624,47 @@ def publish(
                 if any(e.startswith("Push failed:") for e in errors):
                     raise RuntimeError(" | ".join(errors))
                 # PR failure is hard — user asked for a pull request.
-                parts.append(_create_pull_request(task, target, project_config))
+                pr_msg = _create_pull_request(task, target, project_config)
+                parts.append(pr_msg)
+                steps.append(
+                    {
+                        "title": "Opening pull request",
+                        "detail": pr_msg,
+                        "status": "completed",
+                    }
+                )
+                _record_publish_step(task["id"], "Opening pull request", pr_msg)
 
             if do_apply:
                 try:
-                    parts.append(apply_to_local(task, project_config))
+                    apply_msg = apply_to_local(task, project_config)
+                    parts.append(apply_msg)
+                    backup_detail = "Creating backup bundle before applying changes."
+                    if "Backup:" in apply_msg:
+                        backup_path = apply_msg.split("Backup:", 1)[1].strip().rstrip(".")
+                        if backup_path:
+                            backup_detail = f"Backup saved at {backup_path}."
+                    apply_detail = apply_msg
+                    if " Backup:" in apply_detail:
+                        apply_detail = apply_detail.split(" Backup:", 1)[0].strip().rstrip(".")
+                        if not apply_detail.endswith("."):
+                            apply_detail += "."
+                    steps.append(
+                        {
+                            "title": "Creating backup",
+                            "detail": backup_detail,
+                            "status": "completed",
+                        }
+                    )
+                    _record_publish_step(task["id"], "Creating backup", backup_detail)
+                    steps.append(
+                        {
+                            "title": "Applying changes",
+                            "detail": apply_detail,
+                            "status": "completed",
+                        }
+                    )
+                    _record_publish_step(task["id"], "Applying changes", apply_detail)
                 except Exception as exc:
                     errors.append(f"Local apply failed: {exc}")
 
@@ -547,15 +680,34 @@ def publish(
             if errors and len(errors) == (int(do_push) + int(do_apply)):
                 raise RuntimeError(" | ".join(errors))
 
-            detail = ". ".join(parts) + "."
+            steps.append(
+                {
+                    "title": "Finalizing",
+                    "detail": "Updating project state and confirming success.",
+                    "status": "completed",
+                }
+            )
+            _record_publish_step(
+                task["id"],
+                "Finalizing",
+                "Updating project state and confirming success.",
+            )
+
+            footnotes.append("No production deploy was run.")
             if errors:
-                detail += " Warnings: " + " | ".join(errors)
-            detail += " No production deploy was run."
+                footnotes.append("Warnings: " + " | ".join(errors))
             if do_apply and not apply_failed and _is_orchestrator_checkout(project_config):
-                detail += (
-                    " Restart the orchestrator process so the new code is loaded "
+                footnotes.append(
+                    "Restart the orchestrator process so the new code is loaded "
                     "(Python does not hot-reload)."
                 )
+            detail = progress.format_completion_report(
+                task_id=task["id"],
+                title=progress.publish_action_title(report_action),
+                steps=steps,
+                status_label="Completed",
+                footnotes=footnotes,
+            )
 
         tasks.update_task(task["id"], status="published", summary=detail[:4500])
         audit.record(
@@ -576,7 +728,7 @@ def publish(
             learning.maybe_append_playbook(refreshed, action=action)
         except Exception:  # noqa: BLE001
             pass
-        send_text(task["sender"], f"Done for task {task['id']}. {detail}", level="success")
+        send_text(task["sender"], detail, level="success")
     except Exception as exc:
         log.exception("Publication failed")
         tasks.update_task(task["id"], status="publish_failed", summary=str(exc)[:1000])
