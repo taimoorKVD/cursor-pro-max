@@ -1202,6 +1202,7 @@ def status(request: Request) -> JSONResponse:
                     "project": t["project"],
                     "status": t["status"],
                     "execution_stage": t.get("execution_stage"),
+                    "instruction": (t.get("instruction") or "")[:160],
                     "summary": (t.get("summary") or "")[:240],
                     "blocker": (t.get("blocker") or "")[:160],
                 }

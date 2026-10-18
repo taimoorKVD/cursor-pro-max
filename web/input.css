@@ -1070,12 +1070,27 @@ html[data-theme="dark"] {
   .activity-history-main span {
     color: var(--muted);
     font-size: 11px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 100%;
   }
   .activity-history-id {
     flex-shrink: 0;
     color: var(--muted);
     font-size: 10.5px;
     font-variant-numeric: tabular-nums;
+  }
+  .chat-title-editable {
+    cursor: pointer;
+    border-radius: 6px;
+    outline: none;
+  }
+  .chat-title-editable:hover {
+    color: var(--accent);
+  }
+  .chat-title-editable:focus-visible {
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent);
   }
   .work-busy {
     display: none;

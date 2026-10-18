@@ -470,3 +470,63 @@ def test_chat_page_includes_rename_chat_ui(tmp_path, monkeypatch):
     assert "saveRenameChat" in html
     assert "display_name" in html
     assert "Rename chat" in html
+    assert "chat-title-editable" in html
+
+
+def test_activity_format_regexes_use_js_whitespace(tmp_path, monkeypatch):
+    """CHAT_HTML is a Python raw string — \\s must not be double-escaped for the browser."""
+    _client(monkeypatch, tmp_path)
+    from orchestrator.webchat_pages import CHAT_HTML
+
+    # Browser must see \s (whitespace), not \\s (literal backslash + s).
+    assert "replace(/^Agent:\\s*/i" in CHAT_HTML
+    assert "replace(/^Agent:\\\\s*/i" not in CHAT_HTML
+    assert "(Write|Edit|Read|Grep|Glob|Shell|Delete)\\s+(.+)$/i" in CHAT_HTML
+    assert "(Write|Edit|Read|Grep|Glob|Shell|Delete)\\\\s+(.+)$/i" not in CHAT_HTML
+    assert "activityInstructionPreview" in CHAT_HTML
+    assert "projectDisplayName(t.project" in CHAT_HTML
+
+
+def test_status_recent_tasks_include_instruction(tmp_path, monkeypatch):
+    client = _client(monkeypatch, tmp_path)
+    assert _login(client).status_code == 200
+
+    from orchestrator import session, tasks
+
+    tasks.create_task("instrtask0001", "web:owner", "lifeos", "remember me for 30 days")
+    tasks.update_task("instrtask0001", status="running", execution_stage="agent_running")
+    tasks.update_task("instrtask0001", status="review", execution_stage="ready_for_review")
+    session.set_active_project("web:owner", "lifeos")
+
+    status = client.get("/chat/status").json()
+    row = next(t for t in status["recent_tasks"] if t["id"] == "instrtask0001")
+    assert row["instruction"] == "remember me for 30 days"
+
+
+def test_project_switch_rebinds_activity_task(tmp_path, monkeypatch):
+    client = _client(monkeypatch, tmp_path)
+    assert _login(client).status_code == 200
+
+    from orchestrator import session, tasks
+
+    tasks.create_task("switchtask0001", "web:owner", "lifeos", "lifeos work")
+    tasks.update_task("switchtask0001", status="running", execution_stage="agent_running")
+    tasks.create_task("switchtask0002", "web:owner", "demoapp", "other work")
+    tasks.update_task("switchtask0002", status="running", execution_stage="agent_running")
+    tasks.update_task("switchtask0002", status="review", execution_stage="ready_for_review")
+    session.set_active_project("web:owner", "lifeos")
+    session.set_active_task("web:owner", "switchtask0001", project="lifeos")
+
+    before = client.get("/chat/task-progress").json()
+    assert before["task"]["task_id"] == "switchtask0001"
+
+    # switch_project rebinds active_task_id to the destination project's work
+    # (HTTP /chat/active-project also requires a registered project id).
+    result = session.switch_project("web:owner", "demoapp")
+    assert result["changed"] is True
+    assert session.get("web:owner")["active_task_id"] == "switchtask0002"
+
+    after = client.get("/chat/task-progress").json()
+    assert after["task"] is not None
+    assert after["task"]["task_id"] == "switchtask0002"
+    assert after["task"]["project"] == "demoapp"

@@ -949,9 +949,17 @@ function updateChatTitle() {
   const label = activeProject ? projectDisplayName(activeProject) : 'Cursor Orchestrator';
   if (chatTitle) {
     chatTitle.textContent = label;
-    chatTitle.title = activeProject
-      ? (projectDisplayName(activeProject) + ' (' + activeProject + ')')
-      : 'All projects';
+    if (activeProject) {
+      chatTitle.title = 'Click to rename · id ' + activeProject;
+      chatTitle.classList.add('chat-title-editable');
+      chatTitle.setAttribute('role', 'button');
+      chatTitle.tabIndex = 0;
+    } else {
+      chatTitle.title = 'All projects';
+      chatTitle.classList.remove('chat-title-editable');
+      chatTitle.removeAttribute('role');
+      chatTitle.removeAttribute('tabindex');
+    }
   }
   if (renameChatBtn) {
     renameChatBtn.classList.toggle('hidden', !activeProject);
@@ -1393,6 +1401,14 @@ async function removeRegisteredProject(id) {
 
 async function selectProject(id) {
   activeProject = id || '';
+  // Activity panel is project-scoped — drop the previous chat's selection immediately.
+  _selectedTaskId = '';
+  _recentTasksCache = [];
+  _knownTaskIds = new Set();
+  _lastHistorySig = '';
+  _renderedEventIds = new Set();
+  _lastProgressSig = '';
+  setIdleCurrentActivity();
   renderProjects(projectSearch.value);
   setSidebarOpen(false);
   try {
@@ -1427,6 +1443,7 @@ async function selectProject(id) {
     if (stick) log.scrollTop = log.scrollHeight;
     showToast(id ? ('Switched to ' + projectDisplayName(id)) : 'Showing all projects');
     await refreshStatus();
+    if (progressOpen) await refreshProgress();
   } catch (e) {
     showToast('Could not switch project');
   }
@@ -1772,8 +1789,10 @@ function shortPath(raw) {
 function formatActivity(msg) {
   const text = String(msg || '').trim();
   if (!text) return {label: 'Activity', path: '', write: false};
-  const m = text.match(/^(?:Write:\\s*)?(?:Read:\\s*)?(Write|Edit|Read|Grep|Glob|Shell|Delete|Tool)(?:\\s*:\\s*|\\s+)?(?:->\\s*)?(.*)$/i)
-    || text.match(/^(Write|Edit|Read|Grep|Glob|Shell|Delete)\\s+(.+)$/i);
+  // Note: CHAT_HTML is a Python raw string — use \s/\b (one backslash) so the
+  // browser regex sees whitespace/word-boundary, not a literal backslash.
+  const m = text.match(/^(?:Write:\s*)?(?:Read:\s*)?(Write|Edit|Read|Grep|Glob|Shell|Delete|Tool)(?:\s*:\s*|\s+)?(?:->\s*)?(.*)$/i)
+    || text.match(/^(Write|Edit|Read|Grep|Glob|Shell|Delete)\s+(.+)$/i);
   if (m) {
     const tool = m[1].charAt(0).toUpperCase() + m[1].slice(1).toLowerCase();
     const path = shortPath((m[2] || '').trim());
@@ -1781,9 +1800,10 @@ function formatActivity(msg) {
     return {label: tool, path, write};
   }
   if (/^Agent:/i.test(text)) {
-    return {label: 'Agent', path: text.replace(/^Agent:\\s*/i, '').slice(0, 80), write: false};
+    const body = text.replace(/^Agent:\s*/i, '').replace(/\s+/g, ' ').trim();
+    return {label: 'Agent', path: body.slice(0, 100), write: false};
   }
-  return {label: '', path: shortPath(text) || text.slice(0, 90), write: /\\b(write|edit|delete)/i.test(text)};
+  return {label: '', path: shortPath(text) || text.slice(0, 90), write: /\b(write|edit|delete)/i.test(text)};
 }
 function renderActivityLine(parsed) {
   if (parsed.label && parsed.path) {
@@ -1852,10 +1872,17 @@ function isClearedActivityTask(t) {
   if (blocker.includes('cleared') || summary.includes('cleared:')) return true;
   return false;
 }
+function activityInstructionPreview(t) {
+  const raw = String((t && (t.instruction || t.summary)) || '').replace(/\s+/g, ' ').trim();
+  if (!raw) return '';
+  return raw.length > 72 ? (raw.slice(0, 69) + '…') : raw;
+}
 function renderActivityHistory(tasks, activeId) {
   if (!activityHistory) return;
   const rows = (tasks || []).filter(t => !isClearedActivityTask(t));
-  const sig = rows.map(t => t.id + ':' + t.status + ':' + (t.execution_stage || '')).join('|') + '|' + (activeId || '');
+  const sig = rows.map(t =>
+    t.id + ':' + t.status + ':' + (t.execution_stage || '') + ':' + (t.instruction || '') + ':' + projectDisplayName(t.project || '')
+  ).join('|') + '|' + (activeId || '');
   if (sig === _lastHistorySig) return;
   _lastHistorySig = sig;
   if (!rows.length) {
@@ -1869,10 +1896,14 @@ function renderActivityHistory(tasks, activeId) {
     btn.className = 'activity-history-item' + (t.id === activeId ? ' active' : '');
     btn.dataset.taskId = t.id;
     const live = t.status === 'queued' || t.status === 'running' || t.status === 'publishing';
+    const projectLabel = projectDisplayName(t.project || '') || t.project || 'task';
+    const preview = activityInstructionPreview(t);
+    btn.title = preview || projectLabel;
     btn.innerHTML =
       '<span class="activity-history-main">'
-      + '<strong>' + escapeHtml(t.project || 'task') + '</strong>'
-      + '<span>' + escapeHtml(statusLabel(t.status, t.execution_stage)) + '</span>'
+      + '<strong>' + escapeHtml(projectLabel) + '</strong>'
+      + '<span>' + escapeHtml(statusLabel(t.status, t.execution_stage))
+      + (preview ? (' · ' + escapeHtml(preview)) : '') + '</span>'
       + '</span>'
       + '<span class="activity-history-id">' + escapeHtml(String(t.id).slice(0, 8))
       + (live ? ' · live' : '') + '</span>';
@@ -2437,6 +2468,18 @@ if (folderPickerModal) {
 }
 if (renameChatBtn) {
   renameChatBtn.addEventListener('click', () => openRenameChat(activeProject));
+}
+if (chatTitle) {
+  chatTitle.addEventListener('click', () => {
+    if (activeProject) openRenameChat(activeProject);
+  });
+  chatTitle.addEventListener('keydown', (ev) => {
+    if (!activeProject) return;
+    if (ev.key === 'Enter' || ev.key === ' ') {
+      ev.preventDefault();
+      openRenameChat(activeProject);
+    }
+  });
 }
 if (renameChatSave) {
   renameChatSave.addEventListener('click', () => saveRenameChat());
