@@ -78,6 +78,7 @@ def initialize() -> None:
         from orchestrator.learning import ensure_schema as ensure_learning_schema
         from orchestrator.session import ensure_schema as ensure_session_schema
         from orchestrator.task_events import ensure_schema as ensure_events_schema
+        from orchestrator.token_spend import ensure_schema as ensure_token_spend_schema
         from orchestrator.webchat import ensure_schema as ensure_webchat_schema
 
         ensure_schema(c)
@@ -88,6 +89,7 @@ def initialize() -> None:
         ensure_attachments_schema(c)
         ensure_converse_schema(c)
         ensure_learning_schema(c)
+        ensure_token_spend_schema(c)
 
 
 def _ensure_column(conn: sqlite3.Connection, table: str, column: str, ddl_type: str) -> None:

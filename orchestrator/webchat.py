@@ -1164,7 +1164,7 @@ def status(request: Request) -> JSONResponse:
     if not _authed(request):
         return _json({"error": "Unauthorized"}, 401)
     from orchestrator import agent as agent_mod
-    from orchestrator import llm_chat, preflight, queue, session
+    from orchestrator import llm_chat, preflight, queue, session, token_spend
     from orchestrator.projects import projects as load_projects
     from orchestrator.projects import projects_root_info
     from orchestrator.tasks import (
@@ -1245,6 +1245,7 @@ def status(request: Request) -> JSONResponse:
                 for t in recent
                 if (t.get("execution_stage") or "") != "canceled"
             ],
+            "token_spend": token_spend.summary(),
         }
     )
 

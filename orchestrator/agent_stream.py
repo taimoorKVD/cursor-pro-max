@@ -23,10 +23,61 @@ class StreamEvidence:
     text_chunks: list[str] = field(default_factory=list)
     result_text: str = ""
     session_id: str = ""
+    request_id: str = ""
+    usage: dict[str, int] = field(default_factory=dict)
     raw_events: int = 0
     saw_tool: bool = False
     saw_write: bool = False
     saw_read: bool = False
+
+
+def _usage_int(value: Any) -> int:
+    if value is None or isinstance(value, bool):
+        return 0
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        try:
+            return max(0, int(float(value)))
+        except (TypeError, ValueError):
+            return 0
+
+
+def _extract_usage(data: dict[str, Any]) -> dict[str, int] | None:
+    """Normalize Cursor stream-json usage (camelCase or snake_case) into ints."""
+    raw = data.get("usage")
+    if not isinstance(raw, dict):
+        # Some builds put counters on the result event itself.
+        if any(
+            k in data
+            for k in (
+                "inputTokens",
+                "outputTokens",
+                "input_tokens",
+                "output_tokens",
+                "cacheReadTokens",
+                "cache_read_tokens",
+            )
+        ):
+            raw = data
+        else:
+            return None
+
+    def pick(*keys: str) -> int:
+        for key in keys:
+            if key in raw and raw.get(key) is not None:
+                return _usage_int(raw.get(key))
+        return 0
+
+    usage = {
+        "input_tokens": pick("input_tokens", "inputTokens"),
+        "output_tokens": pick("output_tokens", "outputTokens"),
+        "cache_read_tokens": pick("cache_read_tokens", "cacheReadTokens"),
+        "cache_write_tokens": pick("cache_write_tokens", "cacheWriteTokens"),
+    }
+    if sum(usage.values()) <= 0:
+        return None
+    return usage
 
 
 # Cursor CLI keys: readToolCall, writeToolCall, editToolCall, grepToolCall, …
@@ -185,11 +236,18 @@ def parse_line(line: str, evidence: StreamEvidence) -> dict[str, Any] | None:
     sid = data.get("session_id") or data.get("chat_id") or data.get("chatId")
     if isinstance(sid, str) and sid.strip():
         evidence.session_id = sid.strip()
+    rid = data.get("request_id") or data.get("requestId")
+    if isinstance(rid, str) and rid.strip():
+        evidence.request_id = rid.strip()
 
     etype = str(
         data.get("type") or data.get("event") or data.get("kind") or data.get("role") or ""
     ).lower()
     subtype = str(data.get("subtype") or "").lower()
+
+    usage = _extract_usage(data)
+    if usage:
+        evidence.usage = usage
 
     # --- Cursor tool_call events (readToolCall / writeToolCall / …) ---
     if etype == "tool_call" or "tool" in etype or "function" in etype:
@@ -272,9 +330,10 @@ def parse_line(line: str, evidence: StreamEvidence) -> dict[str, Any] | None:
         if isinstance(result, str) and result.strip():
             evidence.result_text = result.strip()[-2200:]
         msg = str(data.get("message") or result or "Agent stream result")[:240]
-        if isinstance(msg, str):
-            return {"kind": "result", "message": msg}
-        return {"kind": "result", "message": "Agent stream result"}
+        payload: dict[str, Any] = {"kind": "result", "message": msg if isinstance(msg, str) else "Agent stream result"}
+        if evidence.usage:
+            payload["usage"] = dict(evidence.usage)
+        return payload
 
     # --- Generic content fallback ---
     content = data.get("content") or data.get("text") or data.get("result")

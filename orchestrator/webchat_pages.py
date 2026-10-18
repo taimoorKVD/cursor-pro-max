@@ -376,6 +376,23 @@ CHAT_HTML = _CHAT_HEAD + r"""
       Restart
     </button>
   </div>
+  <div id="tokenSpendPanel" class="mx-2.5 mt-2 flex shrink-0 flex-col gap-1 rounded-2xl border border-line bg-white px-3 py-2.5 shadow-[0_4px_14px_rgba(18,32,28,.04)]" title="Token spend (updates with status poll)" aria-live="polite">
+    <div class="flex items-center justify-between gap-2">
+      <span class="text-[10px] font-bold tracking-[.04em] text-muted uppercase">Token spend</span>
+      <span id="tokenSpendRuns" class="text-[10px] text-muted">0 runs today</span>
+    </div>
+    <strong id="tokenSpendBase" class="block text-[12.5px] font-semibold leading-snug text-ink tabular-nums">0 in · 0 out</strong>
+    <span id="tokenSpendTotal" class="block text-[11px] text-muted tabular-nums">Base today: 0</span>
+    <details id="tokenSpendDetails" class="mt-0.5">
+      <summary class="cursor-pointer select-none text-[11px] font-semibold text-muted hover:text-ink">Detailed spendings</summary>
+      <dl id="tokenSpendDetailList" class="mt-1.5 grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5 text-[11px] tabular-nums">
+        <dt class="text-muted">Cache read</dt><dd id="tokenSpendCacheRead" class="text-right font-semibold text-ink">0</dd>
+        <dt class="text-muted">Cache write</dt><dd id="tokenSpendCacheWrite" class="text-right font-semibold text-ink">0</dd>
+        <dt class="text-muted">All-time base</dt><dd id="tokenSpendAllTime" class="text-right font-semibold text-ink">0</dd>
+        <dt class="text-muted">Last turn</dt><dd id="tokenSpendLast" class="text-right font-semibold text-ink">—</dd>
+      </dl>
+    </details>
+  </div>
   <div class="mx-2.5 mt-2 mb-1 flex shrink-0 items-center gap-2.5 rounded-2xl border border-line bg-white px-3 py-2.5 shadow-[0_4px_14px_rgba(18,32,28,.04)]" title="System status">
     <div class="relative grid size-9 shrink-0 place-items-center" aria-hidden="true">
       <svg class="size-9 -rotate-90 text-line" viewBox="0 0 36 36"><circle cx="18" cy="18" r="15" fill="none" stroke="currentColor" stroke-width="3"/><circle id="statusRing" cx="18" cy="18" r="15" fill="none" stroke="var(--accent)" stroke-width="3" stroke-linecap="round" stroke-dasharray="94" stroke-dashoffset="18"/></svg>
@@ -2385,6 +2402,62 @@ function stageHint(stage, status) {
   return 'Working…';
 }
 
+function formatTokenCount(n) {
+  const v = Math.max(0, Number(n) || 0);
+  if (v >= 1000000) {
+    const m = v / 1000000;
+    const s = m >= 10 ? String(Math.round(m)) : m.toFixed(1);
+    return (s.endsWith('.0') ? s.slice(0, -2) : s) + 'M';
+  }
+  if (v >= 1000) {
+    const k = v / 1000;
+    const s = k >= 100 ? String(Math.round(k)) : k.toFixed(1);
+    return (s.endsWith('.0') ? s.slice(0, -2) : s) + 'k';
+  }
+  return String(Math.round(v));
+}
+
+function applyTokenSpend(spend) {
+  const panel = document.getElementById('tokenSpendPanel');
+  if (!panel) return;
+  const today = (spend && spend.today) || {};
+  const allTime = (spend && spend.all_time) || {};
+  const last = spend && spend.last;
+  const input = today.input_tokens || 0;
+  const output = today.output_tokens || 0;
+  const total = today.total_tokens != null ? today.total_tokens : (input + output);
+  const runs = today.runs || 0;
+  const baseEl = document.getElementById('tokenSpendBase');
+  const totalEl = document.getElementById('tokenSpendTotal');
+  const runsEl = document.getElementById('tokenSpendRuns');
+  const cacheReadEl = document.getElementById('tokenSpendCacheRead');
+  const cacheWriteEl = document.getElementById('tokenSpendCacheWrite');
+  const allTimeEl = document.getElementById('tokenSpendAllTime');
+  const lastEl = document.getElementById('tokenSpendLast');
+  if (baseEl) baseEl.textContent = formatTokenCount(input) + ' in · ' + formatTokenCount(output) + ' out';
+  if (totalEl) totalEl.textContent = 'Base today: ' + formatTokenCount(total);
+  if (runsEl) runsEl.textContent = runs + (runs === 1 ? ' run today' : ' runs today');
+  if (cacheReadEl) cacheReadEl.textContent = formatTokenCount(today.cache_read_tokens || 0);
+  if (cacheWriteEl) cacheWriteEl.textContent = formatTokenCount(today.cache_write_tokens || 0);
+  if (allTimeEl) {
+    const allBase = allTime.total_tokens != null
+      ? allTime.total_tokens
+      : ((allTime.input_tokens || 0) + (allTime.output_tokens || 0));
+    allTimeEl.textContent = formatTokenCount(allBase);
+  }
+  if (lastEl) {
+    if (last && (last.input_tokens || last.output_tokens)) {
+      lastEl.textContent = formatTokenCount(last.input_tokens || 0) + ' / ' + formatTokenCount(last.output_tokens || 0);
+      lastEl.title = last.task_id ? ('Task ' + last.task_id) : '';
+    } else {
+      lastEl.textContent = '—';
+      lastEl.title = '';
+    }
+  }
+  panel.dataset.runs = String(runs);
+  panel.dataset.total = String(total);
+}
+
 async function refreshStatus() {
   try {
     const r = await fetch('/chat/status', {cache: 'no-store'});
@@ -2406,6 +2479,7 @@ async function refreshStatus() {
     document.getElementById('statusDetail').textContent = j.agent_ok
       ? ('Agent ready · All systems ok')
       : ('Agent issue · check laptop');
+    applyTokenSpend(j.token_spend);
     const ring = document.getElementById('statusRing');
     if (ring) ring.style.strokeDashoffset = j.agent_ok ? '18' : '70';
     if (Array.isArray(j.inflight_projects)) {

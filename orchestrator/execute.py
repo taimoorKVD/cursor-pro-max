@@ -274,7 +274,7 @@ def execute_task(task_id: str, *, job_id: int | None = None, fence: str | None =
                         stage=stage_now,
                         detail={
                             k: ev.get(k)
-                            for k in ("kind", "tool", "path", "write")
+                            for k in ("kind", "tool", "path", "write", "usage")
                             if ev.get(k) is not None
                         },
                     )
@@ -347,6 +347,19 @@ def execute_task(task_id: str, *, job_id: int | None = None, fence: str | None =
                 prep_thread.join(timeout=2)
 
             session_id = (getattr(evidence, "session_id", None) or "").strip()
+            request_id = (getattr(evidence, "request_id", None) or "").strip()
+            usage = getattr(evidence, "usage", None) or {}
+            if isinstance(usage, dict) and usage:
+                from orchestrator import token_spend
+
+                token_spend.record_from_usage(
+                    usage,
+                    kind="cursor_agent",
+                    task_id=task_id,
+                    sender=sender,
+                    session_id=session_id or None,
+                    request_id=request_id or None,
+                )
             update_fields: dict = {"exit_code": exit_code, "agent_pid": None}
             if session_id:
                 update_fields["agent_chat_id"] = session_id
@@ -366,6 +379,8 @@ def execute_task(task_id: str, *, job_id: int | None = None, fence: str | None =
                     "stream_events": evidence.raw_events,
                     "tools": evidence.tool_calls[:20],
                     "session_id": session_id or None,
+                    "request_id": request_id or None,
+                    "usage": usage if isinstance(usage, dict) and usage else None,
                     "resumed": bool(resume_chat_id),
                     "error": (str(agent_exc)[:300] if agent_exc else None),
                 },
