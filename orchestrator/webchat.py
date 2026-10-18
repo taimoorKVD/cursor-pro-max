@@ -812,6 +812,60 @@ async def focus_task(request: Request) -> JSONResponse:
     )
 
 
+@router.post("/chat/retry-task")
+async def retry_task(request: Request) -> JSONResponse:
+    """Re-attempt a publish_failed task from Activity history (Try Again)."""
+    if not _authed(request):
+        return _json({"error": "Unauthorized"}, 401)
+    data = await _read_json(request)
+    if data is None:
+        return _json({"error": "Bad request"}, 400)
+    task_id = str(data.get("task_id") or "").strip().lower()
+    if not task_id:
+        return _json({"error": "task_id required"}, 400)
+    from orchestrator import audit, queue, session
+    from orchestrator.tasks import claim_publishing, get_task
+
+    task = get_task(task_id)
+    if not task or task.get("sender") != SENDER:
+        return _json({"error": "Task not found"}, 404)
+    if task.get("status") != "publish_failed":
+        return _json(
+            {
+                "error": f"Task is {task.get('status')}, not publish_failed",
+                "status": task.get("status"),
+            },
+            409,
+        )
+    action = str(data.get("action") or "APPLY").strip().upper()
+    if action not in {"APPLY", "PUSH", "PR", "DEPLOY"}:
+        return _json({"error": "action must be APPLY, PUSH, PR, or DEPLOY"}, 400)
+    if not claim_publishing(task["id"]):
+        return _json(
+            {"error": "Task is already being published", "status": "publishing"},
+            409,
+        )
+    queue.enqueue(task["id"], kind=f"publish:{action}")
+    session.set_active_task(
+        SENDER, task["id"], project=str(task.get("project") or "") or None
+    )
+    audit.record(
+        "webchat_retry_task",
+        actor=SENDER,
+        task_id=task["id"],
+        detail={"action": action, "project": task.get("project")},
+    )
+    return _json(
+        {
+            "ok": True,
+            "task_id": task["id"],
+            "project": task.get("project"),
+            "status": "publishing",
+            "action": action,
+        }
+    )
+
+
 @router.post("/chat/active-project")
 async def set_active_project_api(request: Request) -> JSONResponse:
     """Switch the operator's active project and return a fresh project-scoped thread."""

@@ -547,6 +547,70 @@ def test_activity_format_regexes_use_js_whitespace(tmp_path, monkeypatch):
     assert "resolveReviewCta" in CHAT_HTML
     assert "clearResolvedReviewCtas" in CHAT_HTML
     assert "openProgressPanel()" in CHAT_HTML
+    assert "retryPublishFailedTask" in CHAT_HTML
+    assert "activity-history-try" in CHAT_HTML
+    assert "Try Again" in CHAT_HTML
+    assert "/chat/retry-task" in CHAT_HTML
+    assert "Publish failed" in CHAT_HTML
+
+
+def test_retry_task_requeues_publish_failed(tmp_path, monkeypatch):
+    client = _client(monkeypatch, tmp_path)
+    assert _login(client).status_code == 200
+
+    from orchestrator import session, tasks
+
+    tid = "retryfail0001"
+    tasks.create_task(tid, "web:owner", "lifeos", "fix the login")
+    tasks.update_task(tid, status="running", execution_stage="agent_running")
+    tasks.update_task(
+        tid,
+        status="review",
+        execution_stage="ready_for_review",
+        content_digest="a" * 40,
+        branch="review/retryfail0001",
+    )
+    tasks.update_task(tid, status="publishing")
+    tasks.update_task(
+        tid,
+        status="publish_failed",
+        execution_stage="failed",
+        summary="apply blocked",
+        content_digest="a" * 40,
+        branch="review/retryfail0001",
+    )
+    session.set_active_project("web:owner", "lifeos")
+    session.set_active_task("web:owner", tid, project="lifeos")
+
+    enqueued = []
+    monkeypatch.setattr(
+        "orchestrator.queue.enqueue",
+        lambda task_id, kind="execute": enqueued.append((task_id, kind)) or 1,
+    )
+
+    missing = client.post("/chat/retry-task", json={"task_id": "doesnotexist1"})
+    assert missing.status_code == 404
+
+    ok = client.post("/chat/retry-task", json={"task_id": tid})
+    assert ok.status_code == 200
+    body = ok.json()
+    assert body["ok"] is True
+    assert body["task_id"] == tid
+    assert body["status"] == "publishing"
+    assert body["action"] == "APPLY"
+    assert enqueued == [(tid, "publish:APPLY")]
+    assert tasks.get_task(tid)["status"] == "publishing"
+
+    # Non-publish_failed tasks are rejected.
+    tasks.create_task("retryok000001", "web:owner", "lifeos", "other")
+    tasks.update_task("retryok000001", status="running", execution_stage="agent_running")
+    tasks.update_task("retryok000001", status="review", execution_stage="ready_for_review")
+    bad = client.post("/chat/retry-task", json={"task_id": "retryok000001"})
+    assert bad.status_code == 409
+
+    css = client.get("/chat/app.css")
+    assert css.status_code == 200
+    assert "activity-history-try" in css.text
 
 
 def test_status_recent_tasks_include_instruction(tmp_path, monkeypatch):

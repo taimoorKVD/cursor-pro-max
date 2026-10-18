@@ -2157,6 +2157,7 @@ function statusLabel(status, stage) {
   if (status === 'review') return 'Ready for review';
   if (status === 'running' || status === 'queued' || status === 'publishing') return 'In progress';
   if (status === 'published') return 'Published';
+  if (status === 'publish_failed') return 'Publish failed';
   if (status === 'rejected') return 'Rejected';
   if (stage === 'canceled' || status === 'failed') return 'Cancelled';
   return status || 'Task';
@@ -2175,6 +2176,33 @@ function activityInstructionPreview(t) {
   if (!raw) return '';
   return raw.length > 72 ? (raw.slice(0, 69) + '…') : raw;
 }
+async function retryPublishFailedTask(taskId, action) {
+  if (!taskId || sending) return;
+  sending = true;
+  try {
+    const r = await fetch('/chat/retry-task', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({task_id: taskId, action: action || 'APPLY'}),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      showToast(j.error || ('Retry failed: ' + r.status));
+      return;
+    }
+    _selectedTaskId = taskId;
+    _renderedEventIds = new Set();
+    _lastProgressSig = '';
+    _lastHistorySig = '';
+    showToast('Retrying publish…');
+    await refreshStatus();
+    await refreshProgress();
+  } catch (e) {
+    showToast('Retry failed');
+  } finally {
+    sending = false;
+  }
+}
 function renderActivityHistory(tasks, activeId) {
   if (!activityHistory) return;
   const rows = (tasks || []).filter(t => !isClearedActivityTask(t));
@@ -2189,15 +2217,18 @@ function renderActivityHistory(tasks, activeId) {
   }
   activityHistory.innerHTML = '';
   rows.forEach((t) => {
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = 'activity-history-item' + (t.id === activeId ? ' active' : '');
-    btn.dataset.taskId = t.id;
+    const row = document.createElement('div');
+    row.className = 'activity-history-item' + (t.id === activeId ? ' active' : '');
+    row.dataset.taskId = t.id;
     const live = t.status === 'queued' || t.status === 'running' || t.status === 'publishing';
+    const canRetry = t.status === 'publish_failed';
     const projectLabel = projectDisplayName(t.project || '') || t.project || 'task';
     const preview = activityInstructionPreview(t);
-    btn.title = preview || projectLabel;
-    btn.innerHTML =
+    row.title = preview || projectLabel;
+    const select = document.createElement('button');
+    select.type = 'button';
+    select.className = 'activity-history-select';
+    select.innerHTML =
       '<span class="activity-history-main">'
       + '<strong>' + escapeHtml(projectLabel) + '</strong>'
       + '<span>' + escapeHtml(statusLabel(t.status, t.execution_stage))
@@ -2205,14 +2236,28 @@ function renderActivityHistory(tasks, activeId) {
       + '</span>'
       + '<span class="activity-history-id">' + escapeHtml(String(t.id).slice(0, 8))
       + (live ? ' · live' : '') + '</span>';
-    btn.addEventListener('click', async () => {
+    select.addEventListener('click', async () => {
       _selectedTaskId = t.id;
       _renderedEventIds = new Set();
       _lastProgressSig = '';
       await focusTaskOnServer(t.id);
       refreshProgress();
     });
-    activityHistory.appendChild(btn);
+    row.appendChild(select);
+    if (canRetry) {
+      const tryBtn = document.createElement('button');
+      tryBtn.type = 'button';
+      tryBtn.className = 'activity-history-try';
+      tryBtn.textContent = 'Try Again';
+      tryBtn.title = 'Retry publishing this task';
+      tryBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        retryPublishFailedTask(t.id, 'APPLY');
+      });
+      row.appendChild(tryBtn);
+    }
+    activityHistory.appendChild(row);
   });
 }
 function appendFeedItems(evs, {replace}) {
