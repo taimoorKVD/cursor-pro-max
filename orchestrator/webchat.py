@@ -796,22 +796,6 @@ async def set_active_project_api(request: Request) -> JSONResponse:
     if project and project not in registry:
         return _json({"error": f"Unknown project: {project}"}, 404)
     result = session.switch_project(SENDER, project)
-    if result["changed"] and project:
-        store(
-            "out",
-            f"Switched to {project}. This chat thread is only for {project} — "
-            "earlier conversations on other projects stay in their own threads. "
-            "Any agent work already running elsewhere keeps going in the background.",
-            level="info",
-            project=project,
-        )
-    elif result["changed"] and not project:
-        store(
-            "out",
-            "Cleared the active project. Showing the combined chat history again.",
-            level="info",
-            project=None,
-        )
     return _json(
         {
             "ok": True,

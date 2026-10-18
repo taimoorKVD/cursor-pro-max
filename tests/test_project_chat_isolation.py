@@ -108,11 +108,9 @@ def test_switch_project_clears_lifeos_thread_from_ui(tmp_path, monkeypatch):
     other_msgs = body["messages"]
     assert not any("dark mode" in m["text"].lower() for m in other_msgs)
     assert not any("lifeos" in m["text"].lower() and "dark" in m["text"].lower() for m in other_msgs)
-    # Unused project: only the switch notice (or empty) — never prior LifeOS work.
-    assert all(
-        m.get("project") == "other-app" or "Switched to other-app" in (m.get("text") or "")
-        for m in other_msgs
-    )
+    # Unused project: empty thread — no auto "Switched to …" notice, never prior LifeOS work.
+    assert other_msgs == []
+    assert not any("Switched to" in (m.get("text") or "") for m in other_msgs)
 
     polled = client.get("/chat/messages?project=other-app").json()
     assert polled["active_project"] == "other-app"

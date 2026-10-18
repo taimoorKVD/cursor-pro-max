@@ -1441,7 +1441,6 @@ async function selectProject(id) {
       }
     }
     if (stick) log.scrollTop = log.scrollHeight;
-    showToast(id ? ('Switched to ' + projectDisplayName(id)) : 'Showing all projects');
     await refreshStatus();
     if (progressOpen) await refreshProgress();
   } catch (e) {
