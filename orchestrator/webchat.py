@@ -496,7 +496,7 @@ def clear_chat(request: Request) -> JSONResponse:
     if not _authed(request):
         return _json({"error": "Unauthorized"}, 401)
     from orchestrator import history, retention, session
-    from orchestrator.converse import clear_pending
+    from orchestrator.converse import clear_conversation_state
 
     project = _current_project()
     cleanup = retention.cleanup_sender_workspaces(
@@ -505,7 +505,7 @@ def clear_chat(request: Request) -> JSONResponse:
     clear_messages(project=project)
     # Drop active task so the next message starts cleanly.
     session.set_active_task(SENDER, None, project=project or None)
-    clear_pending(SENDER)
+    clear_conversation_state(SENDER)
     try:
         history.clear_sender(SENDER, project=project or None)
     except Exception:  # noqa: BLE001

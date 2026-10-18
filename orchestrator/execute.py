@@ -401,6 +401,11 @@ def execute_task(task_id: str, *, job_id: int | None = None, fence: str | None =
                     tasks.update_task(task_id, modified_files=modified)
 
         digest = workspace.content_digest(target, branch)
+        tests_failed = bool(
+            project_config.get("test_command")
+            and not config.DRY_RUN
+            and test_output.startswith("FAIL:")
+        )
         report = scrub(
             f"Agent: {agent_result}\nTests: {test_output}\n"
             f"Changes: {workspace.change_summary(target, branch, before=before_snapshot)}"
@@ -421,15 +426,28 @@ def execute_task(task_id: str, *, job_id: int | None = None, fence: str | None =
             ended_at=ended,
             last_activity_at=ended,
             modified_files=modified or (latest.get("modified_files") if latest else None),
+            blocker=(
+                "Configured tests failed — review the test output carefully before approving."
+                if tests_failed
+                else None
+            ),
         )
         if not won:
             return
         task_events.record(
             task_id,
             "ready_for_review",
-            "Coding complete — ready for review",
+            (
+                "Coding complete — ready for review (tests failed)"
+                if tests_failed
+                else "Coding complete — ready for review"
+            ),
             stage="ready_for_review",
-            detail={"digest_prefix": digest[:16], "files": len(modified or [])},
+            detail={
+                "digest_prefix": digest[:16],
+                "files": len(modified or []),
+                "tests_failed": tests_failed,
+            },
         )
         audit.record(
             "execute_review",
@@ -466,6 +484,17 @@ def execute_task(task_id: str, *, job_id: int | None = None, fence: str | None =
                 f"Workspace is ready for {project} (practice/dry-run — I skipped the coding agent). "
                 "Say if you want a live run next.",
                 level="success",
+            )
+        elif tests_failed:
+            send_text(
+                sender,
+                f"Coding finished for {project}, but configured tests FAILED — "
+                "review the output before you approve.\n\n"
+                f"{report[:1800]}{file_bits}\n\n"
+                "Your real project folder is unchanged until you approve "
+                "(open Activity for the Approve & apply button).\n"
+                f"{next_step}",
+                level="warning",
             )
         else:
             send_text(

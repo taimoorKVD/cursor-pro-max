@@ -1,17 +1,141 @@
 """Natural-language intent parsing for chat (ChatGPT/Cursor-style)."""
 from __future__ import annotations
 
+import json
 import re
 import time
 from dataclasses import dataclass
 from typing import Any
 
-# sender -> pending clarification (short-lived)
+# sender -> pending clarification (short-lived; also persisted for restarts)
 _pending: dict[str, dict[str, Any]] = {}
 _PENDING_TTL = 600
-# sender -> last work request (survives failed runs / "do it again")
+# sender -> last work request (survives failed runs / "do it again" / process restart)
 _memory: dict[str, dict[str, Any]] = {}
 _MEMORY_TTL = 86400
+
+
+def ensure_schema(conn) -> None:
+    """Durable pending clarifications + last-work memory (survive orchestrator restart)."""
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS conversation_pending (
+            sender TEXT PRIMARY KEY,
+            payload TEXT NOT NULL,
+            ts REAL NOT NULL
+        )"""
+    )
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS conversation_memory (
+            sender TEXT PRIMARY KEY,
+            project TEXT NOT NULL,
+            instruction TEXT NOT NULL,
+            task_id TEXT,
+            ts REAL NOT NULL
+        )"""
+    )
+
+
+def _db_write_pending(sender: str, item: dict[str, Any] | None) -> None:
+    try:
+        from orchestrator import db
+
+        with db.DB_LOCK, db.connect() as c:
+            ensure_schema(c)
+            if item is None:
+                c.execute("DELETE FROM conversation_pending WHERE sender=?", (sender,))
+                return
+            c.execute(
+                """INSERT INTO conversation_pending (sender, payload, ts)
+                   VALUES (?, ?, ?)
+                   ON CONFLICT(sender) DO UPDATE SET
+                     payload=excluded.payload,
+                     ts=excluded.ts""",
+                (
+                    sender,
+                    json.dumps(item, ensure_ascii=False),
+                    float(item.get("ts") or time.time()),
+                ),
+            )
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _db_read_pending(sender: str) -> dict[str, Any] | None:
+    try:
+        from orchestrator import db
+
+        with db.DB_LOCK, db.connect() as c:
+            ensure_schema(c)
+            row = c.execute(
+                "SELECT payload, ts FROM conversation_pending WHERE sender=?",
+                (sender,),
+            ).fetchone()
+        if not row:
+            return None
+        payload = json.loads(row["payload"] or "{}")
+        if not isinstance(payload, dict):
+            return None
+        payload.setdefault("ts", float(row["ts"] or 0))
+        return payload
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _db_write_memory(sender: str, item: dict[str, Any] | None) -> None:
+    try:
+        from orchestrator import db
+
+        with db.DB_LOCK, db.connect() as c:
+            ensure_schema(c)
+            if item is None:
+                c.execute("DELETE FROM conversation_memory WHERE sender=?", (sender,))
+                return
+            c.execute(
+                """INSERT INTO conversation_memory
+                   (sender, project, instruction, task_id, ts)
+                   VALUES (?, ?, ?, ?, ?)
+                   ON CONFLICT(sender) DO UPDATE SET
+                     project=excluded.project,
+                     instruction=excluded.instruction,
+                     task_id=excluded.task_id,
+                     ts=excluded.ts""",
+                (
+                    sender,
+                    str(item.get("project") or ""),
+                    str(item.get("instruction") or ""),
+                    item.get("task_id"),
+                    float(item.get("ts") or time.time()),
+                ),
+            )
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _db_read_memory(sender: str) -> dict[str, Any] | None:
+    try:
+        from orchestrator import db
+
+        with db.DB_LOCK, db.connect() as c:
+            ensure_schema(c)
+            row = c.execute(
+                """SELECT project, instruction, task_id, ts
+                   FROM conversation_memory WHERE sender=?""",
+                (sender,),
+            ).fetchone()
+        if not row:
+            return None
+        project = (row["project"] or "").strip()
+        instruction = (row["instruction"] or "").strip()
+        if not project or not instruction:
+            return None
+        return {
+            "ts": float(row["ts"] or 0),
+            "project": project,
+            "instruction": instruction,
+            "task_id": row["task_id"],
+        }
+    except Exception:  # noqa: BLE001
+        return None
 
 
 @dataclass
@@ -122,22 +246,34 @@ def _is_show_projects_root_request(lowered: str) -> bool:
 
 
 def clear_pending(sender: str) -> None:
+    if not sender:
+        return
     _pending.pop(sender, None)
+    _db_write_pending(sender, None)
 
 
 def get_pending(sender: str) -> dict[str, Any] | None:
+    if not sender:
+        return None
     item = _pending.get(sender)
+    if item is None:
+        item = _db_read_pending(sender)
+        if item is not None:
+            _pending[sender] = item
     if not item:
         return None
-    if time.time() - item.get("ts", 0) > _PENDING_TTL:
-        _pending.pop(sender, None)
+    if time.time() - float(item.get("ts") or 0) > _PENDING_TTL:
+        clear_pending(sender)
         return None
     return item
 
 
 def set_pending(sender: str, **fields: Any) -> None:
+    if not sender:
+        return
     fields["ts"] = time.time()
     _pending[sender] = fields
+    _db_write_pending(sender, fields)
 
 
 def remember_work(
@@ -147,22 +283,48 @@ def remember_work(
     instruction: str,
     task_id: str | None = None,
 ) -> None:
-    _memory[sender] = {
+    """Remember the last coding request so retry / continue works after restart."""
+    if not sender:
+        return
+    item = {
         "ts": time.time(),
         "project": project,
         "instruction": instruction,
         "task_id": task_id,
     }
+    _memory[sender] = item
+    _db_write_memory(sender, item)
+
+
+def forget_work(sender: str) -> None:
+    """Drop remembered work for a sender (e.g. chat clear)."""
+    if not sender:
+        return
+    _memory.pop(sender, None)
+    _db_write_memory(sender, None)
 
 
 def last_work(sender: str) -> dict[str, Any] | None:
+    """Return last work request, loading from SQLite after process restart if needed."""
+    if not sender:
+        return None
     item = _memory.get(sender)
+    if item is None:
+        item = _db_read_memory(sender)
+        if item is not None:
+            _memory[sender] = item
     if not item:
         return None
-    if time.time() - item.get("ts", 0) > _MEMORY_TTL:
-        _memory.pop(sender, None)
+    if time.time() - float(item.get("ts") or 0) > _MEMORY_TTL:
+        forget_work(sender)
         return None
     return item
+
+
+def clear_conversation_state(sender: str) -> None:
+    """Clear pending clarifications and remembered work for a sender."""
+    clear_pending(sender)
+    forget_work(sender)
 
 
 def looks_like_retry(text: str) -> bool:
@@ -365,8 +527,21 @@ def parse_intent(text: str, registry: dict[str, Any], sender: str = "") -> Inten
         return Intent(kind="thanks", raw=raw)
 
     # Explicit classic commands still work
-    if re.fullmatch(r"(help|\?|commands|/help|/start|what can you do|how does this work)", lowered):
+    if re.fullmatch(r"(help|\?|commands|/help|/start|what can you do)", lowered):
         return Intent(kind="help", raw=raw)
+
+    # Product / architecture questions — grounded facts, never a coding task
+    try:
+        from orchestrator import product_facts
+
+        if product_facts.looks_like_product_question(raw) or re.fullmatch(
+            r"how does this work\??",
+            lowered,
+        ):
+            return Intent(kind="how_it_works", raw=raw)
+    except Exception:  # noqa: BLE001
+        if re.fullmatch(r"how does this work\??", lowered):
+            return Intent(kind="how_it_works", raw=raw)
 
     # Registry management (must beat generic "add/remove … project" work intents)
     set_root = _extract_set_root_path(raw)
@@ -661,16 +836,6 @@ def parse_intent(text: str, registry: dict[str, Any], sender: str = "") -> Inten
 
 # Publish / control verbs must not become Cursor coding tasks when Groq mislabels them.
 _CONTROL_KINDS = frozenset({"approve", "reject", "cancel_task", "local_git"})
-_LLM_SOFT_KINDS = frozenset(
-    {
-        "task",
-        "task_need_project",
-        "chat",
-        "unknown",
-        "ask_instruction",
-        "continue_work",
-    }
-)
 
 
 def resolve_intent(
@@ -680,18 +845,13 @@ def resolve_intent(
     sender: str = "",
     llm_intent: Intent | None = None,
 ) -> Intent:
-    """Prefer deterministic regex for approve/apply/reject over LLM task mislabels."""
+    """Prefer deterministic regex for approve/apply/commit over LLM mislabels."""
     regex = parse_intent(text, registry, sender=sender)
     if llm_intent is None:
         return regex
-    if regex.kind in _CONTROL_KINDS and llm_intent.kind in _LLM_SOFT_KINDS:
-        return regex
-    # Bare "apply" must stay APPLY even if the model returns approve/PUSH.
-    if (
-        regex.kind == "approve"
-        and llm_intent.kind == "approve"
-        and regex.action == "APPLY"
-        and llm_intent.action != "APPLY"
-    ):
+    # Control phrases (apply / commit local / reject / …) always win — including
+    # when the model returns a different control kind (e.g. approve/PUSH for
+    # "commit local and apply"), or soft kinds like task/chat.
+    if regex.kind in _CONTROL_KINDS or regex.kind == "how_it_works":
         return regex
     return llm_intent

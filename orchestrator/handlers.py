@@ -22,9 +22,10 @@ from orchestrator.process import cancel_tracked
 
 
 def _help() -> str:
+    from orchestrator import product_facts
+
     return (
-        "I help you change code on your laptop projects - just chat like you would "
-        "with ChatGPT, and I'll run the work safely in a copy first.\n\n"
+        f"{product_facts.architecture_blurb()}\n\n"
         "For example:\n"
         '- "Let\'s work on lifeos" then describe the bug\n'
         '- "What\'s remaining?" / "Done?" / "What changes did you make?"\n'
@@ -419,10 +420,21 @@ def _handle_inner(sender: str, body: str) -> None:
         send_text(sender, soft_reply or _help(), level="info")
         return
 
+    if intent.kind == "how_it_works":
+        from orchestrator import product_facts
+
+        grounded = product_facts.try_answer(body) or product_facts.architecture_blurb()
+        send_text(sender, grounded, level="info")
+        return
+
     if intent.kind == "chat":
+        from orchestrator import product_facts
+
+        grounded = product_facts.try_answer(body)
         send_text(
             sender,
-            soft_reply
+            grounded
+            or soft_reply
             or (
                 "I'm here to help with your projects. "
                 'Ask "what projects do I have?", "show my tasks", '
@@ -941,10 +953,18 @@ def _handle_inner(sender: str, body: str) -> None:
         )
         send_text(sender, detail, level="success")
         if action == "COMMIT_APPLY":
-            # Re-enter approve as APPLY after the tree is clean.
+            if not task or task.get("status") not in {"review", "publish_failed"}:
+                send_text(
+                    sender,
+                    "Local commit finished, but I don't have a review-ready task to apply yet. "
+                    'When a task is ready, say "apply" or "approve and apply".',
+                    level="info",
+                )
+                return
+            # Re-enter approve as APPLY after the tree is clean (never spawn a coding task).
             intent = converse.Intent(
                 kind="approve",
-                task_id=task["id"] if task else None,
+                task_id=task["id"],
                 action="APPLY",
                 raw=intent.raw,
             )
@@ -1156,16 +1176,21 @@ def _handle_inner(sender: str, body: str) -> None:
         )
         return
 
-    # Unknown - stay conversational, don't dump a command manual
+    # Unknown - stay conversational; answer product FAQ when we can
+    from orchestrator import product_facts
+
+    grounded = product_facts.try_answer(body)
     send_text(
         sender,
-        soft_reply
+        grounded
+        or soft_reply
         or (
             "I'm not quite sure what you mean yet. Try something like:\n"
             '- "What projects do I have?"\n'
             '- "On lifeos, fix the login validation"\n'
             '- "Show my tasks"\n'
-            '- "Approve and push" when something is ready\n\n'
+            '- "Approve and apply" when something is ready\n'
+            '- "How does this work?" for how coding + approval works\n\n'
             "What would you like to work on?"
         ),
         level="info",

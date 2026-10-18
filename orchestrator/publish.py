@@ -128,15 +128,32 @@ def _remote_sha(target: Path, branch: str) -> str | None:
     return line.split()[0]
 
 
-def _host_label(target: Path) -> str:
+def _require_origin(target: Path) -> str:
+    """Return origin URL or raise a clear local-only guidance error."""
     remote = _run(["git", "remote", "get-url", "origin"], cwd=target, timeout=10)
-    if remote.returncode == 0 and "github.com" in remote.stdout.strip().lower():
+    url = (remote.stdout or "").strip()
+    if remote.returncode or not url:
+        raise RuntimeError(
+            "No git remote named 'origin'. This project is local-only right now — "
+            'say "approve and apply" to update your laptop folder, or add an origin '
+            "remote first, then try push again."
+        )
+    return url
+
+
+def _host_label(target: Path) -> str:
+    try:
+        url = _require_origin(target)
+    except RuntimeError:
+        return "origin"
+    if "github.com" in url.lower():
         return "GitHub"
     return "origin"
 
 
 def _push_branch(task: dict, target: Path) -> str:
     """Push only when the remote can fast-forward. Identical SHAs are a no-op."""
+    _require_origin(target)
     label = _host_label(target)
     local = _head_sha(target)
     branch = task["branch"]
@@ -315,11 +332,19 @@ def apply_to_local(task: dict, project_config: dict) -> str:
     if dirty.returncode:
         raise RuntimeError(f"git status failed in {source}: {(dirty.stderr or '')[:300]}")
     if dirty.stdout.strip():
+        paths = [
+            (ln[3:].strip() if len(ln) > 3 else ln.strip())
+            for ln in dirty.stdout.splitlines()
+            if ln.strip()
+        ]
+        preview = ", ".join(paths[:8])
+        more = f" (+{len(paths) - 8} more)" if len(paths) > 8 else ""
         raise ValueError(
-            f"Your local project at {source} has uncommitted changes, so I won't "
+            f"Your local project at {source} has uncommitted changes"
+            f"{f' ({preview}{more})' if preview else ''}, so I won't "
             f"merge task {task['id']} yet. In chat say "
-            f'"commit my local changes" or "stash my local changes", '
-            f'then "apply locally" (or "approve and push") again.'
+            f'"commit local and apply" (or "commit my local changes" / '
+            f'"stash my local changes"), then try again.'
         )
 
     # Ensure the branch ref is visible from the main checkout (shared object store / worktree).
@@ -338,10 +363,34 @@ def apply_to_local(task: dict, project_config: dict) -> str:
     if merged.returncode:
         merged = _run(["git", "merge", "--no-edit", branch], cwd=source, timeout=60)
         if merged.returncode:
+            conflict_out = _run(
+                ["git", "diff", "--name-only", "--diff-filter=U"],
+                cwd=source,
+                timeout=15,
+            )
+            conflicted = [
+                ln.strip()
+                for ln in (conflict_out.stdout or "").splitlines()
+                if ln.strip()
+            ]
+            if not conflicted:
+                conflicted = re.findall(
+                    r"CONFLICT(?:\s+\([^)]+\))?\s+in\s+(.+)",
+                    (merged.stderr or "") + "\n" + (merged.stdout or ""),
+                    re.I,
+                )
             _run(["git", "merge", "--abort"], cwd=source, timeout=30)
+            conflict_bits = (
+                f" Conflicted files: {', '.join(conflicted[:12])}."
+                if conflicted
+                else ""
+            )
             raise RuntimeError(
-                f"Could not merge into local {current}: {(merged.stderr or merged.stdout)[-700:]} "
-                f"The checkout was left unchanged. Backup: {backup}"
+                f"Could not merge into local {current}:{conflict_bits} "
+                f"{(merged.stderr or merged.stdout)[-500:]} "
+                f"The checkout was left unchanged (merge aborted). "
+                f'Say "reject that" and restart after aligning your local branch, '
+                f"or resolve the conflict manually on the laptop. Backup: {backup}"
             )
         mode = "merged"
     else:
@@ -486,6 +535,15 @@ def publish(
                 except Exception as exc:
                     errors.append(f"Local apply failed: {exc}")
 
+            push_failed = any(e.startswith("Push failed:") for e in errors)
+            apply_failed = any(e.startswith("Local apply failed:") for e in errors)
+            # Explicit push/PR must not soft-succeed as "published" when origin/push fails.
+            # Include any successful steps (e.g. local apply) so the user knows what landed.
+            if push_failed and action in {"PUSH", "PR"}:
+                prefix = (". ".join(parts) + ". " if parts else "")
+                raise RuntimeError(prefix + " | ".join(errors))
+            if apply_failed and action == "APPLY":
+                raise RuntimeError(" | ".join(errors))
             if errors and len(errors) == (int(do_push) + int(do_apply)):
                 raise RuntimeError(" | ".join(errors))
 
@@ -493,7 +551,7 @@ def publish(
             if errors:
                 detail += " Warnings: " + " | ".join(errors)
             detail += " No production deploy was run."
-            if do_apply and _is_orchestrator_checkout(project_config):
+            if do_apply and not apply_failed and _is_orchestrator_checkout(project_config):
                 detail += (
                     " Restart the orchestrator process so the new code is loaded "
                     "(Python does not hot-reload)."

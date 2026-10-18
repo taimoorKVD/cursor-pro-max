@@ -54,6 +54,15 @@ def test_resolve_intent_prefers_regex_apply_over_llm_task():
     assert resolved2.action == "APPLY"
 
 
+def test_resolve_intent_prefers_local_git_over_llm_approve():
+    from orchestrator.converse import Intent, resolve_intent
+
+    llm = Intent(kind="approve", action="PUSH", raw="commit local and apply")
+    resolved = resolve_intent("commit local and apply", REGISTRY, llm_intent=llm)
+    assert resolved.kind == "local_git"
+    assert resolved.action == "COMMIT_APPLY"
+
+
 def test_parse_create_pull_request():
     i = parse_intent("Create a pull request instead.", REGISTRY)
     assert i.kind == "approve" and i.action == "PR"

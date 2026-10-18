@@ -24,6 +24,7 @@ KINDS = frozenset(
         "greet",
         "thanks",
         "help",
+        "how_it_works",
         "cancel",
         "projects",
         "scan_projects",
@@ -262,6 +263,8 @@ def _chat_history(sender: str, *, current: str) -> list[dict[str, str]]:
 
 
 def _system_prompt(registry: dict[str, Any], sender: str) -> str:
+    from orchestrator import product_facts
+
     facts = project_facts(registry)
     pending = get_pending(sender) if sender else None
     pending_bits = ""
@@ -302,30 +305,36 @@ def _system_prompt(registry: dict[str, Any], sender: str) -> str:
         "IMPORTANT: You are NOT the coding agent. You classify intents and draft "
         "informational replies. Never invent execution progress, file changes, "
         "timings, or test results. Status/remaining/done/estimate/changes/stuck "
-        "replies must set reply=null so the server answers from task evidence.\n\n"
+        "replies must set reply=null so the server answers from task evidence.\n"
+        "For product/architecture questions, kind=how_it_works with reply=null — "
+        "the server answers from grounded facts. Never invent Cursor REST APIs, "
+        "GitHub-only editing, or model self-training.\n\n"
+        f"{product_facts.ARCHITECTURE_FACTS}\n\n"
         f"{facts}"
         f"{task_bits}"
         f"{pending_bits}"
         f"{memory_bits}"
         f"{session_bits}\n\n"
         "Return ONLY a JSON object with keys:\n"
-        "- kind: one of greet, thanks, help, cancel, projects, scan_projects, "
-        "set_projects_root, show_projects_root, register_project, update_project, "
-        "remove_project, tasks, status, "
+        "- kind: one of greet, thanks, help, how_it_works, cancel, projects, "
+        "scan_projects, set_projects_root, show_projects_root, register_project, "
+        "update_project, remove_project, tasks, status, "
         "remaining, done_check, estimate, changes, stuck, continue_work, "
         "has_project, ask_instruction, task, task_need_project, approve, reject, "
-        "cancel_task, retry, chat\n"
+        "cancel_task, local_git, retry, chat\n"
         "- project: project id from the list (or folder id for register_project), or null\n"
         "- instruction: what to change (for task / task_need_project / retry), or null\n"
         "- updates: object of fields for update_project "
         "(allow_push/allow_deploy/apply_local bools, or display_name/description/…), else null\n"
         "- task_id: 12-char hex id if mentioned, else null\n"
-        "- action: PUSH, APPLY, PR, DEPLOY, or REJECT when approving/rejecting, else null\n"
+        "- action: PUSH, APPLY, PR, DEPLOY, REJECT, COMMIT, STASH, or COMMIT_APPLY "
+        "when relevant, else null\n"
         "- reply: natural message ONLY for greet, thanks, help, cancel, chat, "
         "projects, tasks, has_project, ask_instruction, task_need_project; "
-        "null for status/remaining/done_check/estimate/changes/stuck/continue_work/"
-        "approve/reject/cancel_task/task/retry/scan_projects/set_projects_root/"
-        "show_projects_root/register_project/update_project/remove_project\n\n"
+        "null for how_it_works/status/remaining/done_check/estimate/changes/stuck/"
+        "continue_work/approve/reject/cancel_task/task/retry/local_git/"
+        "scan_projects/set_projects_root/show_projects_root/register_project/"
+        "update_project/remove_project\n\n"
         "Rules:\n"
         "- Use conversation history + Active session. If the user already chose a "
         "project and then describes a bug/change, kind=task with that project + instruction.\n"
@@ -360,6 +369,8 @@ def _system_prompt(registry: dict[str, Any], sender: str) -> str:
         '- \"commit my local changes\" / \"stash local changes\" / '
         '\"commit local and apply\" → kind \"local_git\" with action '
         "COMMIT, STASH, or COMMIT_APPLY (optional commit message in instruction)\n"
+        '- How Cursor/API key/GitHub/safety/memory/self-training works → kind '
+        '"how_it_works" (reply null; never invent)\n'
         '- Reject / discard → kind \"reject\"\n'
         '- Cancel a running task → kind \"cancel_task\"\n'
         '- Cancel clarifying a question → kind \"cancel\"\n'

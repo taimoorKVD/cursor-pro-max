@@ -73,6 +73,7 @@ def initialize() -> None:
         )
         from orchestrator.attachments import ensure_schema as ensure_attachments_schema
         from orchestrator.audit import ensure_schema
+        from orchestrator.converse import ensure_schema as ensure_converse_schema
         from orchestrator.history import ensure_schema as ensure_history_schema
         from orchestrator.session import ensure_schema as ensure_session_schema
         from orchestrator.task_events import ensure_schema as ensure_events_schema
@@ -84,6 +85,7 @@ def initialize() -> None:
         ensure_events_schema(c)
         ensure_history_schema(c)
         ensure_attachments_schema(c)
+        ensure_converse_schema(c)
 
 
 def _ensure_column(conn: sqlite3.Connection, table: str, column: str, ddl_type: str) -> None:
