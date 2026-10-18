@@ -301,19 +301,28 @@ async function refresh() {{
     const r = await fetch('/chat/qr.json', {{cache: 'no-store'}});
     const j = await r.json();
     if (!j.ok) {{
-      err.textContent = j.error || 'Tunnel unavailable';
+      // Keep the last known URL/QR active until a new tunnel URL is published.
+      const keep = (urlEl.value || '').trim();
+      err.textContent = j.error || 'Tunnel reconnecting — previous link stays shown until a new URL is ready.';
       err.classList.add('show');
-      setReady(false);
-      document.getElementById('meta').textContent = 'Waiting for Cloudflare tunnel…';
+      if (!keep) {{
+        setReady(false);
+        document.getElementById('meta').textContent = 'Waiting for Cloudflare tunnel…';
+      }} else {{
+        document.getElementById('meta').textContent = 'Previous URL still shown — waiting for a new tunnel URL…';
+      }}
       return;
     }}
     err.classList.remove('show');
     setReady(true, j.url, j.img);
     document.getElementById('meta').textContent = 'Updated ' + new Date().toLocaleTimeString();
   }} catch (e) {{
-    err.textContent = 'Could not refresh QR — is the orchestrator running?';
+    const keep = (urlEl.value || '').trim();
+    err.textContent = keep
+      ? 'Orchestrator briefly unreachable — previous tunnel URL is still shown.'
+      : 'Could not refresh QR — is the orchestrator running?';
     err.classList.add('show');
-    setReady(false);
+    if (!keep) setReady(false);
   }}
 }}
 if (qrCard.dataset.ready !== '1') setReady(false);
@@ -362,8 +371,12 @@ CHAT_HTML = _CHAT_HEAD + r"""
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/><path d="M12 11v5M9.5 13.5h5"/></svg>
       Manage
     </button>
+    <button type="button" id="restartOrchestratorBtn" class="side-nav-btn" title="Restart the orchestrator process">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M3 12a9 9 0 0 1 15.5-6.4"/><path d="M21 12a9 9 0 0 1-15.5 6.4"/><path d="M3 5v5h5M21 19v-5h-5"/></svg>
+      Restart
+    </button>
   </div>
-  <div class="mx-2.5 mt-2 mb-1 flex shrink-0 items-center gap-2.5 rounded-2xl border border-line bg-white px-3 py-2.5 shadow-[0_4px_14px_rgba(18,32,28,.04)]">
+  <div class="mx-2.5 mt-2 mb-1 flex shrink-0 items-center gap-2.5 rounded-2xl border border-line bg-white px-3 py-2.5 shadow-[0_4px_14px_rgba(18,32,28,.04)]" title="System status">
     <div class="relative grid size-9 shrink-0 place-items-center" aria-hidden="true">
       <svg class="size-9 -rotate-90 text-line" viewBox="0 0 36 36"><circle cx="18" cy="18" r="15" fill="none" stroke="currentColor" stroke-width="3"/><circle id="statusRing" cx="18" cy="18" r="15" fill="none" stroke="var(--accent)" stroke-width="3" stroke-linecap="round" stroke-dasharray="94" stroke-dashoffset="18"/></svg>
       <span class="absolute size-2 rounded-full bg-ok"></span>
@@ -372,7 +385,6 @@ CHAT_HTML = _CHAT_HEAD + r"""
       <strong id="statusProjects" class="block truncate text-[12.5px] font-semibold text-ink">— projects active</strong>
       <span id="statusDetail" class="block truncate text-[11px] text-muted">Checking agent…</span>
     </div>
-    <svg class="size-4 shrink-0 text-muted" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m9 6 6 6-6 6"/></svg>
   </div>
 </aside>
 <div id="manageDrawerBackdrop" class="fixed inset-0 z-[60] hidden bg-ink/35 backdrop-blur-[2px] [&.show]:block" aria-hidden="true"></div>
@@ -582,6 +594,18 @@ CHAT_HTML = _CHAT_HEAD + r"""
 <button id="jump" type="button" title="Jump to latest" class="absolute left-1/2 z-30 hidden -translate-x-1/2 items-center gap-0 rounded-full border border-line bg-white px-3.5 py-1 text-[11px] font-semibold tracking-wide text-muted shadow-[0_6px_18px_rgba(18,32,28,.1)] bottom-[88px] [&.show]:inline-flex [&.show]:animate-rise before:absolute before:top-1/2 before:-left-[42vw] before:h-px before:w-[40vw] before:bg-line before:content-[''] after:absolute after:top-1/2 after:-right-[42vw] after:h-px after:w-[40vw] after:bg-line after:content-['']">Latest</button>
 <div id="toast" class="pointer-events-none absolute bottom-[72px] left-1/2 z-40 max-w-[min(90vw,360px)] -translate-x-1/2 translate-y-2 rounded-xl bg-ink px-4 py-2.5 text-center text-[13px] text-white opacity-0 shadow-[0_12px_30px_rgba(18,32,28,.2)] transition duration-200 [&.show]:translate-y-0 [&.show]:opacity-100"></div>
 </div>
+<div id="reconnectOverlay" class="reconnect-overlay" hidden aria-hidden="true" role="status" aria-live="assertive">
+  <div class="reconnect-overlay-backdrop" aria-hidden="true"></div>
+  <div class="reconnect-overlay-card">
+    <div class="reconnect-orb" aria-hidden="true">
+      <div class="reconnect-orb-core">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 12a9 9 0 0 1 15.5-6.4"/><path d="M21 12a9 9 0 0 1-15.5 6.4"/><path d="M3 5v5h5M21 19v-5h-5"/></svg>
+      </div>
+    </div>
+    <h2 id="reconnectTitle" class="reconnect-title">Reconnecting</h2>
+    <p id="reconnectMsg" class="reconnect-msg">Linking back to your laptop. Your previous tunnel URL stays active until a new one is ready.</p>
+  </div>
+</div>
 <div id="confirmModal" class="confirm-modal" hidden aria-hidden="true">
   <div class="confirm-backdrop" data-confirm-cancel></div>
   <div class="confirm-card" role="dialog" aria-modal="true" aria-labelledby="confirmTitle" aria-describedby="confirmMsg">
@@ -688,12 +712,35 @@ const STATUS_DELAY_MAX = 30000;
 const PROGRESS_DELAY_MIN = 1500;
 const PROGRESS_DELAY_MAX = 20000;
 let transportDown = false;
+let reconnectForced = false;
+function setReconnectOverlay(show, opts) {
+  const overlay = document.getElementById('reconnectOverlay');
+  if (!overlay) return;
+  const options = opts || {};
+  const titleEl = document.getElementById('reconnectTitle');
+  const msgEl = document.getElementById('reconnectMsg');
+  if (titleEl && options.title) titleEl.textContent = options.title;
+  if (msgEl && options.message) msgEl.textContent = options.message;
+  if (show) {
+    overlay.hidden = false;
+    overlay.setAttribute('aria-hidden', 'false');
+    requestAnimationFrame(() => overlay.classList.add('show'));
+  } else {
+    overlay.classList.remove('show');
+    overlay.setAttribute('aria-hidden', 'true');
+    window.setTimeout(() => {
+      if (!overlay.classList.contains('show')) overlay.hidden = true;
+    }, 220);
+  }
+}
 function noteTransportOk() {
   pollDelayMs = POLL_DELAY_MIN;
   statusDelayMs = STATUS_DELAY_MIN;
   progressDelayMs = PROGRESS_DELAY_MIN;
-  if (transportDown) {
+  if (transportDown || reconnectForced) {
     transportDown = false;
+    reconnectForced = false;
+    setReconnectOverlay(false);
   }
 }
 function noteTransportFail() {
@@ -705,6 +752,10 @@ function noteTransportFail() {
   if (pillText) pillText.textContent = 'Reconnecting…';
   const detail = document.getElementById('statusDetail');
   if (detail) detail.textContent = 'Reconnecting to laptop…';
+  setReconnectOverlay(true, {
+    title: 'Reconnecting',
+    message: 'Linking back to your laptop. Your previous tunnel URL stays active until a new one is ready.',
+  });
 }
 let activeProject = '';
 let allProjects = [];
@@ -2673,6 +2724,60 @@ async function doLogout() {
   location.reload();
 }
 
+async function doRestartOrchestrator() {
+  const ok = await askConfirm(
+    'The chat will disconnect briefly while the orchestrator reloads. Your public tunnel URL stays active until Cloudflare issues a new one.',
+    {
+      title: 'Restart orchestrator?',
+      okLabel: 'Restart',
+      danger: true,
+    }
+  );
+  if (!ok) return;
+  const btn = document.getElementById('restartOrchestratorBtn');
+  if (btn) btn.disabled = true;
+  reconnectForced = true;
+  setPill('off');
+  pillText.textContent = 'Restarting…';
+  setReconnectOverlay(true, {
+    title: 'Restarting',
+    message: 'Orchestrator is reloading. Stay on this page — the old tunnel URL stays active until a new one is ready.',
+  });
+  try {
+    const r = await fetch('/chat/restart', {method: 'POST', cache: 'no-store'});
+    if (r.status === 401) { location.reload(); return; }
+    if (!r.ok) {
+      const j = await r.json().catch(() => ({}));
+      reconnectForced = false;
+      setReconnectOverlay(false);
+      showToast(j.error || 'Restart failed', 4500);
+      if (btn) btn.disabled = false;
+      return;
+    }
+  } catch (e) {
+    // Connection drop is expected once the process exits.
+  }
+  // Stay on this origin (old tunnel URL) and poll until the process is healthy again.
+  const started = Date.now();
+  while (Date.now() - started < 90000) {
+    await new Promise((res) => setTimeout(res, 1500));
+    try {
+      const r = await fetch('/chat/status', {cache: 'no-store'});
+      if (r.status === 401) { location.reload(); return; }
+      if (r.ok) {
+        noteTransportOk();
+        showToast('Orchestrator back online');
+        location.reload();
+        return;
+      }
+    } catch (e) {
+      noteTransportFail();
+    }
+  }
+  showToast('Still restarting — refresh when the status pill is live', 6000);
+  if (btn) btn.disabled = false;
+}
+
 document.getElementById('f').addEventListener('submit', (e) => { e.preventDefault(); send(txt.value); });
 txt.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(txt.value); }
@@ -3144,6 +3249,10 @@ projectSearch.addEventListener('input', () => renderProjects(projectSearch.value
 })();
 document.getElementById('popout').addEventListener('click', () => window.open(location.href, '_blank', 'noopener'));
 document.getElementById('avatarBtn').addEventListener('click', doLogout);
+const restartOrchestratorBtn = document.getElementById('restartOrchestratorBtn');
+if (restartOrchestratorBtn) {
+  restartOrchestratorBtn.addEventListener('click', () => { doRestartOrchestrator(); });
+}
 document.getElementById('refresh').addEventListener('click', async () => {
   resetLog();
   await refreshStatus();

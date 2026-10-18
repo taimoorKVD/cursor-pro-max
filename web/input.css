@@ -635,6 +635,130 @@ html[data-theme="dark"] {
     background: var(--accent-soft);
     border-color: color-mix(in srgb, var(--accent) 35%, transparent);
   }
+  @keyframes reconnect-pulse {
+    0%,
+    100% {
+      opacity: 0.35;
+      transform: scale(0.92);
+    }
+    50% {
+      opacity: 1;
+      transform: scale(1.08);
+    }
+  }
+  @keyframes reconnect-ring {
+    0% {
+      transform: scale(0.7);
+      opacity: 0.55;
+    }
+    100% {
+      transform: scale(1.55);
+      opacity: 0;
+    }
+  }
+  @keyframes reconnect-sweep {
+    0% {
+      background-position: 0% 50%;
+    }
+    100% {
+      background-position: 100% 50%;
+    }
+  }
+  .reconnect-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 95;
+    display: grid;
+    place-items: center;
+    padding: max(20px, env(safe-area-inset-top, 0px)) max(20px, env(safe-area-inset-right, 0px))
+      max(20px, env(safe-area-inset-bottom, 0px)) max(20px, env(safe-area-inset-left, 0px));
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.22s ease;
+  }
+  .reconnect-overlay[hidden] {
+    display: none;
+  }
+  .reconnect-overlay.show {
+    opacity: 1;
+    pointer-events: auto;
+  }
+  .reconnect-overlay-backdrop {
+    position: absolute;
+    inset: 0;
+    background:
+      linear-gradient(
+        120deg,
+        rgba(18, 32, 28, 0.72) 0%,
+        rgba(0, 104, 74, 0.55) 45%,
+        rgba(18, 32, 28, 0.78) 100%
+      );
+    background-size: 200% 200%;
+    animation: reconnect-sweep 3.2s ease-in-out infinite alternate;
+    backdrop-filter: blur(6px);
+  }
+  .reconnect-overlay-card {
+    position: relative;
+    z-index: 1;
+    display: grid;
+    justify-items: center;
+    gap: 0.85rem;
+    width: min(100%, 340px);
+    padding: 1.6rem 1.35rem 1.45rem;
+    border-radius: 22px;
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    background: rgba(255, 255, 255, 0.96);
+    box-shadow: 0 28px 70px rgba(8, 20, 16, 0.35);
+    text-align: center;
+  }
+  .reconnect-orb {
+    position: relative;
+    display: grid;
+    place-items: center;
+    width: 4.25rem;
+    height: 4.25rem;
+  }
+  .reconnect-orb::before,
+  .reconnect-orb::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: 999px;
+    border: 2px solid color-mix(in srgb, var(--accent) 55%, transparent);
+    animation: reconnect-ring 1.6s ease-out infinite;
+  }
+  .reconnect-orb::after {
+    animation-delay: 0.55s;
+  }
+  .reconnect-orb-core {
+    display: grid;
+    place-items: center;
+    width: 2.75rem;
+    height: 2.75rem;
+    border-radius: 999px;
+    background: var(--accent-soft);
+    color: var(--accent);
+    animation: reconnect-pulse 1.4s ease-in-out infinite;
+  }
+  .reconnect-orb-core svg {
+    width: 1.35rem;
+    height: 1.35rem;
+  }
+  .reconnect-title {
+    margin: 0;
+    font-family: var(--font-display, inherit);
+    font-size: 1.2rem;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    color: var(--ink);
+  }
+  .reconnect-msg {
+    margin: 0;
+    max-width: 28ch;
+    font-size: 0.88rem;
+    line-height: 1.45;
+    color: var(--muted);
+  }
   .confirm-modal {
     position: fixed;
     inset: 0;

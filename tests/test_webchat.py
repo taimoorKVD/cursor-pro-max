@@ -1,4 +1,5 @@
 import importlib
+from pathlib import Path
 
 from fastapi.testclient import TestClient
 
@@ -8,6 +9,7 @@ PASSWORD = "correct-horse-battery"
 def _client(monkeypatch, tmp_path, password=PASSWORD):
     monkeypatch.setenv("DATABASE_FILE", str(tmp_path / "test.sqlite"))
     monkeypatch.setenv("WORK_ROOT", str(tmp_path / "work"))
+    monkeypatch.setenv("RESTART_REQUEST_FILE", str(tmp_path / "restart-orchestrator.request"))
     monkeypatch.setenv("ORCHESTRATOR_WORKER", "false")
     monkeypatch.setenv("TELEGRAM_POLLING_ENABLED", "false")
     monkeypatch.setenv("WEBCHAT_PASSWORD", password)
@@ -65,6 +67,37 @@ def test_requires_login(tmp_path, monkeypatch):
     assert "Log in" in page.text
     assert client.get("/chat/messages").status_code == 401
     assert client.post("/chat/send", json={"text": "PROJECTS"}).status_code == 401
+
+
+def test_restart_requires_auth_and_writes_signal(tmp_path, monkeypatch):
+    client = _client(monkeypatch, tmp_path)
+    assert client.post("/chat/restart").status_code == 401
+
+    assert _login(client).status_code == 200
+    page = client.get("/chat")
+    assert "restartOrchestratorBtn" in page.text
+    assert "reconnectOverlay" in page.text
+    assert "Reconnect" in page.text or "Reconnecting" in page.text
+
+    from orchestrator import webchat
+
+    started = []
+
+    class _FakeThread:
+        def __init__(self, target=None, name=None, daemon=None):
+            self._target = target
+
+        def start(self):
+            started.append(True)
+
+    monkeypatch.setattr(webchat.threading, "Thread", _FakeThread)
+    resp = client.post("/chat/restart")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body.get("ok") is True
+    assert body.get("restarting") is True
+    assert (tmp_path / "restart-orchestrator.request").is_file()
+    assert started  # exit fallback thread scheduled
 
 
 def test_wrong_password_locks_out(tmp_path, monkeypatch):

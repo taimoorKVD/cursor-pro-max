@@ -94,12 +94,10 @@ function Stop-CloudflaredChildren {
 }
 
 function Clear-PublicUrl([string]$Reason) {
-    if (Test-Path $UrlFile) {
-        Write-Log "TUNNEL_DOWN clear URL ($Reason) was=$script:currentUrl"
-        Remove-Item -Force -ErrorAction SilentlyContinue $UrlFile
-    }
+    # Keep cloudflared-public-url.txt until Set-PublicUrl writes a replacement so
+    # QR / bookmarks / Meta still show the last known URL during reconnect.
+    Write-Log "TUNNEL_DOWN keep prior URL until replacement ($Reason) was=$script:currentUrl"
     $script:currentUrl = ""
-    $script:syncedUrl = ""
 }
 
 function Test-PublicHealth([string]$PublicUrl) {

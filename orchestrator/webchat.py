@@ -490,6 +490,38 @@ def logout() -> JSONResponse:
     return resp
 
 
+@router.post("/chat/restart")
+def restart_orchestrator(request: Request) -> JSONResponse:
+    """Ask the process supervisor to reload uvicorn (or exit so health-watch restarts it).
+
+    Does not touch the Cloudflare tunnel URL file — the last public URL stays
+    advertised until cloudflared publishes a replacement.
+    """
+    if not _authed(request):
+        return _json({"error": "Unauthorized"}, 401)
+
+    import os
+
+    signal_path = Path(config.RESTART_REQUEST_FILE)
+    signal_path.parent.mkdir(parents=True, exist_ok=True)
+    signal_path.write_text(f"webchat:{int(time.time())}\n", encoding="utf-8")
+    audit.record(
+        "webchat_restart_requested",
+        actor=_client_ip(request),
+        detail={"signal": str(signal_path)},
+    )
+
+    def _exit_soon() -> None:
+        # Give start-orchestrator.ps1 time to see the signal and recycle cleanly.
+        # Fallback if no supervisor is watching: exit so a health-watch can restart.
+        time.sleep(8.0)
+        if signal_path.is_file():
+            os._exit(0)
+
+    threading.Thread(target=_exit_soon, name="webchat-restart", daemon=True).start()
+    return _json({"ok": True, "restarting": True})
+
+
 @router.post("/chat/clear")
 def clear_chat(request: Request) -> JSONResponse:
     """Delete chat messages, tasks, and isolated workspaces for a fresh start."""

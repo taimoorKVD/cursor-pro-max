@@ -11,6 +11,7 @@ $ControlLog = Join-Path $LogDir "orchestrator-control.log"
 $Python = Join-Path $Root ".venv\Scripts\python.exe"
 $EnvFile = Join-Path $Root ".env"
 $ProjectsFile = Join-Path $Root "projects.json"
+$RestartRequestFile = Join-Path $Root "data\restart-orchestrator.request"
 $HostAddr = "127.0.0.1"
 $Port = 8000
 # Wait until watched stamps stop changing before killing uvicorn.
@@ -224,6 +225,21 @@ while ($true) {
             $envStamp = Get-FileStamp $EnvFile
             $projStamp = Get-FileStamp $ProjectsFile
             $codeStamp = Get-CodeStamp
+            continue
+        }
+
+        if (Test-Path -LiteralPath $RestartRequestFile) {
+            if ($sinceReload -lt $ReloadCooldownSec) {
+                continue
+            }
+            Write-Log "Manual restart requested via webchat"
+            Remove-Item -LiteralPath $RestartRequestFile -Force -ErrorAction SilentlyContinue
+            Start-Uvicorn "manual-request"
+            $lastReloadAt = [datetime]::UtcNow
+            $envStamp = Get-FileStamp $EnvFile
+            $projStamp = Get-FileStamp $ProjectsFile
+            $codeStamp = Get-CodeStamp
+            Write-Log "Manual reload complete"
             continue
         }
 

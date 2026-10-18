@@ -24,6 +24,10 @@ class Settings:
         self.PROJECTS_ROOT = Path(_projects_root).expanduser() if _projects_root else None
         # Persisted runtime override for the scan directory (survives restarts).
         self.PROJECTS_ROOT_FILE = self._path("PROJECTS_ROOT_FILE", "data/projects_root.json")
+        # Written by webchat "Restart"; start-orchestrator.ps1 watches and reloads uvicorn.
+        self.RESTART_REQUEST_FILE = self._path(
+            "RESTART_REQUEST_FILE", "data/restart-orchestrator.request"
+        )
         self.AGENT_BIN = os.getenv("AGENT_BIN", "agent")
         self.DRY_RUN = os.getenv("DRY_RUN", "true").lower() == "true"
         self.WEBHOOK_REPLY_ENABLED = os.getenv("WEBHOOK_REPLY_ENABLED", "true").lower() == "true"
