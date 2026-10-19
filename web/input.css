@@ -988,6 +988,204 @@ html[data-theme="dark"] {
     line-height: 1.35;
     color: var(--muted);
   }
+  .activity-change-summary {
+    margin: 0 0 0.55rem;
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: var(--ink);
+  }
+  .activity-change-summary button {
+    margin: 0;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--accent);
+    font: inherit;
+    font-weight: 650;
+    cursor: pointer;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+  .review-changes-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 90;
+    background: rgba(18, 32, 28, 0.42);
+    backdrop-filter: blur(2px);
+  }
+  .review-changes-backdrop[hidden],
+  .review-changes-panel[hidden] {
+    display: none !important;
+  }
+  .review-changes-panel {
+    position: fixed;
+    z-index: 95;
+    display: flex;
+    flex-direction: column;
+    inset: max(8px, env(safe-area-inset-top, 0px)) max(8px, env(safe-area-inset-right, 0px))
+      max(8px, env(safe-area-inset-bottom, 0px)) max(8px, env(safe-area-inset-left, 0px));
+    max-width: 1100px;
+    max-height: min(92dvh, 860px);
+    margin: auto;
+    border: 1px solid var(--line);
+    border-radius: 18px;
+    background: var(--surface);
+    box-shadow: 0 24px 64px rgba(18, 32, 28, 0.22);
+    overflow: hidden;
+  }
+  @media (min-width: 900px) {
+    .review-changes-panel {
+      inset: 5vh auto auto 50%;
+      width: min(1100px, calc(100vw - 48px));
+      height: min(86vh, 820px);
+      max-height: none;
+      transform: translateX(-50%);
+    }
+  }
+  .review-changes-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.75rem;
+    padding: 0.85rem 1rem;
+    border-bottom: 1px solid var(--line);
+    background: #fff;
+  }
+  .review-changes-head-copy {
+    display: grid;
+    gap: 0.15rem;
+    min-width: 0;
+  }
+  .review-changes-head-copy strong {
+    font-family: var(--font-display, inherit);
+    font-size: 1.05rem;
+    font-weight: 650;
+    letter-spacing: -0.02em;
+  }
+  .review-changes-meta {
+    font-size: 0.78rem;
+    color: var(--muted);
+  }
+  .review-changes-close {
+    display: inline-flex;
+    width: 2.25rem;
+    height: 2.25rem;
+    align-items: center;
+    justify-content: center;
+    border-radius: 10px;
+    border: 1px solid var(--line);
+    background: #fff;
+    color: var(--ink);
+    cursor: pointer;
+  }
+  .review-changes-close:hover {
+    background: var(--accent-soft);
+  }
+  .review-changes-body {
+    display: grid;
+    grid-template-rows: minmax(0, 34%) minmax(0, 1fr);
+    min-height: 0;
+    flex: 1;
+  }
+  @media (min-width: 720px) {
+    .review-changes-body {
+      grid-template-columns: minmax(200px, 280px) minmax(0, 1fr);
+      grid-template-rows: minmax(0, 1fr);
+    }
+  }
+  .review-changes-files {
+    min-height: 0;
+    border-bottom: 1px solid var(--line);
+    background: #fff;
+    overflow: auto;
+  }
+  @media (min-width: 720px) {
+    .review-changes-files {
+      border-bottom: 0;
+      border-right: 1px solid var(--line);
+    }
+  }
+  .review-changes-file-list {
+    display: flex;
+    flex-direction: column;
+    padding: 0.35rem;
+  }
+  .review-changes-file {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    gap: 0.4rem 0.55rem;
+    align-items: center;
+    width: 100%;
+    padding: 0.55rem 0.65rem;
+    border: 0;
+    border-radius: 10px;
+    background: transparent;
+    color: var(--ink);
+    text-align: left;
+    cursor: pointer;
+    font-size: 0.78rem;
+  }
+  .review-changes-file:hover,
+  .review-changes-file.active {
+    background: var(--accent-soft);
+  }
+  .review-changes-file-status {
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    color: var(--muted);
+  }
+  .review-changes-file-path {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  .review-changes-file-stats {
+    font-variant-numeric: tabular-nums;
+    font-size: 0.7rem;
+    font-weight: 650;
+    white-space: nowrap;
+  }
+  .review-changes-file-stats .add {
+    color: #0b6e4f;
+  }
+  .review-changes-file-stats .del {
+    color: #b42318;
+  }
+  .review-changes-diff {
+    min-height: 0;
+    overflow: auto;
+    background: #0f1a17;
+  }
+  .review-changes-diff-pre {
+    margin: 0;
+    padding: 0.85rem 1rem 1.25rem;
+    min-height: 100%;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.75rem;
+    line-height: 1.45;
+    color: #d7e4df;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .review-changes-diff-pre .diff-add {
+    color: #7ddea8;
+    background: rgba(11, 110, 79, 0.18);
+  }
+  .review-changes-diff-pre .diff-del {
+    color: #ffb4ab;
+    background: rgba(180, 35, 24, 0.16);
+  }
+  .review-changes-diff-pre .diff-meta {
+    color: #8aa39a;
+  }
+  .review-changes-empty {
+    padding: 1.25rem 1rem;
+    font-size: 0.85rem;
+    color: var(--muted);
+  }
   .activity-drawer-sweep {
     position: absolute;
     top: 0;

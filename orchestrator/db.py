@@ -45,6 +45,7 @@ def initialize() -> None:
         _ensure_column(c, "tasks", "agent_pid", "INTEGER")
         _ensure_column(c, "tasks", "exit_code", "INTEGER")
         _ensure_column(c, "tasks", "modified_files", "TEXT")
+        _ensure_column(c, "tasks", "change_details", "TEXT")
         _ensure_column(c, "tasks", "blocker", "TEXT")
         _ensure_column(c, "tasks", "revision", "INTEGER")
         _ensure_column(c, "tasks", "approved_sha", "TEXT")

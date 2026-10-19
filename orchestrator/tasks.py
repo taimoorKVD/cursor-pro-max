@@ -25,6 +25,7 @@ _TASK_COLUMNS = frozenset(
         "agent_pid",
         "exit_code",
         "modified_files",
+        "change_details",
         "blocker",
         "revision",
         "approved_sha",
@@ -90,6 +91,8 @@ def update_task(task_id: str, **fields: Any) -> None:
     fields = dict(fields)
     if "modified_files" in fields and not isinstance(fields["modified_files"], str):
         fields["modified_files"] = json.dumps(fields["modified_files"], ensure_ascii=False)
+    if "change_details" in fields and not isinstance(fields["change_details"], str):
+        fields["change_details"] = json.dumps(fields["change_details"], ensure_ascii=False)
     if "attachments" in fields and not isinstance(fields["attachments"], str):
         fields["attachments"] = json.dumps(fields["attachments"], ensure_ascii=False)
     fields["updated_at"] = db.now()
@@ -115,6 +118,8 @@ def cas_update(task_id: str, expect_status: str, **fields: Any) -> bool:
     fields = dict(fields)
     if "modified_files" in fields and not isinstance(fields["modified_files"], str):
         fields["modified_files"] = json.dumps(fields["modified_files"], ensure_ascii=False)
+    if "change_details" in fields and not isinstance(fields["change_details"], str):
+        fields["change_details"] = json.dumps(fields["change_details"], ensure_ascii=False)
     if "attachments" in fields and not isinstance(fields["attachments"], str):
         fields["attachments"] = json.dumps(fields["attachments"], ensure_ascii=False)
     fields["updated_at"] = db.now()

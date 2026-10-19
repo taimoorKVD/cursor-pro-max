@@ -1,14 +1,17 @@
 """Isolated task workspace creation and change summaries."""
 from __future__ import annotations
 
+import difflib
 import hashlib
 import logging
 import shutil
 import time
 from pathlib import Path
+from typing import Any
 
 from orchestrator import config
 from orchestrator.process import run
+from orchestrator.scrub import scrub
 
 log = logging.getLogger("orchestrator.workspace")
 
@@ -24,6 +27,10 @@ _SKIP_DIR_NAMES = {
     ".orchestrator-attachments",
 }
 _SKIP_FILE_NAMES = {".orchestrator-task.md", ".env"}
+
+_DEFAULT_MAX_FILES = 80
+_DEFAULT_MAX_PATCH_CHARS = 120_000
+_MAX_FILE_BYTES = 512_000
 
 
 def _under_work_root(path: Path) -> bool:
@@ -224,15 +231,27 @@ def file_snapshot(target: Path) -> dict[str, str]:
         if not path.is_file():
             continue
         rel = path.relative_to(target).as_posix()
-        if rel in _SKIP_FILE_NAMES or any(part in _SKIP_DIR_NAMES for part in Path(rel).parts):
-            continue
-        if any(rel.startswith(p + "/") for p in _SKIP_DIR_NAMES if "/" in p):
+        if _skip_rel(rel):
             continue
         try:
             digest = hashlib.sha256(path.read_bytes()).hexdigest()
         except OSError:
             continue
         out[rel] = digest
+    return out
+
+
+def text_snapshot(target: Path, digests: dict[str, str] | None = None) -> dict[str, str]:
+    """Map relative path → utf-8 text for local unified diffs (small text files only)."""
+    target = Path(target)
+    paths = digests if digests is not None else file_snapshot(target)
+    out: dict[str, str] = {}
+    for rel in paths:
+        if _skip_rel(rel):
+            continue
+        text = _read_text_capped(target / rel)
+        if text is not None:
+            out[rel] = text
     return out
 
 
@@ -305,3 +324,293 @@ def content_digest(target: Path, branch: str) -> str:
             h.update(digest.encode())
             h.update(b"\0")
     return h.hexdigest()
+
+
+def _skip_rel(rel: str) -> bool:
+    name = Path(rel).name
+    if name in _SKIP_FILE_NAMES or rel in _SKIP_FILE_NAMES:
+        return True
+    parts = Path(rel).parts
+    if any(part in _SKIP_DIR_NAMES for part in parts):
+        return True
+    return any(rel.startswith(p + "/") for p in _SKIP_DIR_NAMES if "/" in p)
+
+
+def _count_hunk_stats(patch: str) -> tuple[int, int]:
+    additions = 0
+    deletions = 0
+    for ln in patch.splitlines():
+        if ln.startswith("+++") or ln.startswith("---") or ln.startswith("\\"):
+            continue
+        if ln.startswith("+"):
+            additions += 1
+        elif ln.startswith("-"):
+            deletions += 1
+    return additions, deletions
+
+
+def _read_text_capped(path: Path) -> str | None:
+    try:
+        raw = path.read_bytes()
+    except OSError:
+        return None
+    if len(raw) > _MAX_FILE_BYTES:
+        return None
+    if b"\0" in raw[:8192]:
+        return None
+    return raw.decode("utf-8", errors="replace")
+
+
+def _unified_from_texts(
+    path: str,
+    before: str | None,
+    after: str | None,
+) -> str:
+    a = (before or "").splitlines(keepends=True)
+    b = (after or "").splitlines(keepends=True)
+    from_file = f"a/{path}" if before is not None else "/dev/null"
+    to_file = f"b/{path}" if after is not None else "/dev/null"
+    if before is None:
+        from_file = "/dev/null"
+    if after is None:
+        to_file = "/dev/null"
+    lines = list(
+        difflib.unified_diff(a, b, fromfile=from_file, tofile=to_file, lineterm="")
+    )
+    # difflib omits trailing newlines on lineterm=""; normalize to \n-joined text
+    if not lines:
+        return ""
+    return "\n".join(lines) + ("\n" if lines else "")
+
+
+def _file_entry(path: str, status: str, patch: str) -> dict[str, Any]:
+    scrubbed = scrub(patch or "")
+    adds, dels = _count_hunk_stats(scrubbed)
+    return {
+        "path": path,
+        "status": status,
+        "additions": adds,
+        "deletions": dels,
+        "patch": scrubbed,
+    }
+
+
+def _parse_git_status_line(ln: str) -> tuple[str, str] | None:
+    """Return (status_letter, path) from a ``git status --short`` line."""
+    if len(ln) < 4 or not ln.strip():
+        return None
+    xy = ln[:2]
+    rest = ln[3:].strip()
+    if not rest or ".orchestrator-task.md" in rest:
+        return None
+    path = rest
+    if " -> " in rest:
+        path = rest.split(" -> ", 1)[1].strip()
+    if not path or _skip_rel(path):
+        return None
+    # Prefer index/worktree letter that indicates the change type.
+    letter = (xy[0] if xy[0] not in {" ", "?"} else xy[1]).upper()
+    if xy == "??":
+        letter = "A"
+    elif "R" in xy.upper():
+        letter = "R"
+    elif "D" in xy.upper():
+        letter = "D"
+    elif "A" in xy.upper():
+        letter = "A"
+    else:
+        letter = "M"
+    return letter, path
+
+
+def _git_patch_for_path(target: Path, path: str, status: str) -> str:
+    if status == "A":
+        # Untracked or newly added: prefer working-tree content as a new-file diff.
+        full = target / path
+        after = _read_text_capped(full) if full.is_file() else None
+        if after is None and full.is_file():
+            return f"Binary or large file changed: {path}\n"
+        # Try staged/unstaged new-file diff first.
+        result = run(
+            ["git", "-C", str(target), "diff", "HEAD", "--", path],
+            timeout=30,
+        )
+        patch = (result.stdout or "").strip()
+        if patch:
+            return patch + "\n"
+        if after is not None:
+            return _unified_from_texts(path, None, after)
+        return f"New file: {path}\n"
+    if status == "D":
+        result = run(
+            ["git", "-C", str(target), "diff", "HEAD", "--", path],
+            timeout=30,
+        )
+        patch = (result.stdout or "").strip()
+        if patch:
+            return patch + "\n"
+        return f"Deleted file: {path}\n"
+    result = run(
+        ["git", "-C", str(target), "diff", "HEAD", "--", path],
+        timeout=30,
+    )
+    patch = (result.stdout or "").strip()
+    if patch:
+        return patch + "\n"
+    # Cached (staged) only
+    staged = run(
+        ["git", "-C", str(target), "diff", "--cached", "HEAD", "--", path],
+        timeout=30,
+    )
+    staged_patch = (staged.stdout or "").strip()
+    if staged_patch:
+        return staged_patch + "\n"
+    return f"Changed: {path}\n"
+
+
+def _detailed_git(
+    target: Path,
+    *,
+    max_files: int,
+    max_patch_chars: int,
+) -> dict[str, Any]:
+    result = run(["git", "-C", str(target), "status", "--short"], timeout=30)
+    entries: list[tuple[str, str]] = []
+    for ln in (result.stdout or "").splitlines():
+        parsed = _parse_git_status_line(ln)
+        if parsed:
+            entries.append(parsed)
+    truncated = len(entries) > max_files
+    entries = entries[:max_files]
+    files: list[dict[str, Any]] = []
+    used = 0
+    for status, path in entries:
+        patch = _git_patch_for_path(target, path, status)
+        remaining = max_patch_chars - used
+        if remaining <= 0:
+            truncated = True
+            entry = _file_entry(path, status, f"(patch omitted — size cap reached)\n")
+            entry["patch"] = ""
+            files.append(entry)
+            continue
+        if len(patch) > remaining:
+            patch = patch[:remaining] + "\n… (truncated)\n"
+            truncated = True
+        entry = _file_entry(path, status, patch)
+        used += len(entry["patch"])
+        files.append(entry)
+    return _pack_changes(files, truncated=truncated)
+
+
+def _detailed_local(
+    target: Path,
+    before: dict[str, str],
+    *,
+    before_texts: dict[str, str] | None = None,
+    max_files: int,
+    max_patch_chars: int,
+) -> dict[str, Any]:
+    after = file_snapshot(target)
+    changed = diff_snapshots(before, after)
+    truncated = len(changed) > max_files
+    changed = changed[:max_files]
+    texts = before_texts or {}
+    files: list[dict[str, Any]] = []
+    used = 0
+    for path in changed:
+        if _skip_rel(path):
+            continue
+        in_before = path in before
+        in_after = path in after
+        full = target / path
+        if in_before and not in_after:
+            status = "D"
+            before_text = texts.get(path)
+            if before_text is not None:
+                patch = _unified_from_texts(path, before_text, None)
+            else:
+                patch = f"Deleted file: {path}\n"
+        elif not in_before and in_after:
+            status = "A"
+            after_text = _read_text_capped(full) if full.is_file() else None
+            if after_text is None:
+                patch = f"Binary or large new file: {path}\n"
+            else:
+                patch = _unified_from_texts(path, None, after_text)
+        else:
+            status = "M"
+            after_text = _read_text_capped(full) if full.is_file() else None
+            before_text = texts.get(path)
+            if before_text is not None and after_text is not None:
+                patch = _unified_from_texts(path, before_text, after_text)
+            elif after_text is None and before_text is None:
+                patch = f"Modified (binary or large): {path}\n"
+            elif before_text is not None:
+                patch = _unified_from_texts(path, before_text, after_text)
+            else:
+                patch = (
+                    f"--- a/{path}\n+++ b/{path}\n"
+                    f"@@ content changed (pre-image not retained) @@\n"
+                    + "".join(f"+{ln}\n" for ln in (after_text or "").splitlines()[:400])
+                )
+                if (after_text or "").count("\n") >= 400:
+                    patch += "… (truncated)\n"
+        remaining = max_patch_chars - used
+        if remaining <= 0:
+            truncated = True
+            files.append(_file_entry(path, status, ""))
+            continue
+        if len(patch) > remaining:
+            patch = patch[:remaining] + "\n… (truncated)\n"
+            truncated = True
+        entry = _file_entry(path, status, patch)
+        used += len(entry["patch"])
+        files.append(entry)
+    return _pack_changes(files, truncated=truncated)
+
+
+def _pack_changes(files: list[dict[str, Any]], *, truncated: bool) -> dict[str, Any]:
+    additions = sum(int(f.get("additions") or 0) for f in files)
+    deletions = sum(int(f.get("deletions") or 0) for f in files)
+    return {
+        "files": files,
+        "stats": {
+            "files": len(files),
+            "additions": additions,
+            "deletions": deletions,
+        },
+        "truncated": bool(truncated),
+    }
+
+
+def detailed_changes(
+    target: Path | str,
+    branch: str,
+    *,
+    before: dict[str, str] | None = None,
+    before_texts: dict[str, str] | None = None,
+    max_files: int = _DEFAULT_MAX_FILES,
+    max_patch_chars: int = _DEFAULT_MAX_PATCH_CHARS,
+) -> dict[str, Any]:
+    """Return per-file unified diffs for pre-push review.
+
+    Git workspaces use ``git status`` + ``git diff HEAD``. Local workspaces
+    require ``before`` (pre-agent ``file_snapshot``); pass ``before_texts`` from
+    ``text_snapshot`` for real modify/delete hunks.
+    """
+    target = Path(target)
+    max_files = max(1, min(int(max_files), 200))
+    max_patch_chars = max(2000, min(int(max_patch_chars), 500_000))
+    if branch:
+        return _detailed_git(
+            target, max_files=max_files, max_patch_chars=max_patch_chars
+        )
+    if before is None:
+        return _pack_changes([], truncated=False)
+    return _detailed_local(
+        target,
+        before,
+        before_texts=before_texts,
+        max_files=max_files,
+        max_patch_chars=max_patch_chars,
+    )

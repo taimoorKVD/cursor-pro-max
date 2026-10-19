@@ -163,6 +163,11 @@ def execute_task(task_id: str, *, job_id: int | None = None, fence: str | None =
 
         # Snapshot after attachments so copied images are not reported as agent edits.
         before_snapshot = workspace.file_snapshot(target) if not branch else None
+        before_texts = (
+            workspace.text_snapshot(target, before_snapshot)
+            if before_snapshot is not None
+            else None
+        )
 
         learned = ""
         try:
@@ -490,6 +495,16 @@ def execute_task(task_id: str, *, job_id: int | None = None, fence: str | None =
             f"Agent: {agent_result}\nTests: {test_output}\n"
             f"Changes: {workspace.change_summary(target, branch, before=before_snapshot)}"
         )
+        try:
+            change_details = workspace.detailed_changes(
+                target,
+                branch,
+                before=before_snapshot,
+                before_texts=before_texts,
+            )
+        except Exception:  # noqa: BLE001
+            log.exception("detailed_changes failed for task %s", task_id)
+            change_details = {"files": [], "stats": {"files": 0, "additions": 0, "deletions": 0}, "truncated": False}
         if job_id is not None and fence and not queue.fence_matches(job_id, fence):
             return
         if _cancelled(task_id):
@@ -516,6 +531,7 @@ def execute_task(task_id: str, *, job_id: int | None = None, fence: str | None =
             ended_at=ended,
             last_activity_at=ended,
             modified_files=modified or (latest.get("modified_files") if latest else None),
+            change_details=change_details,
             blocker=review_blocker,
         )
         if not won:

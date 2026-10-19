@@ -52,6 +52,35 @@ def _files(task: dict[str, Any]) -> list[str]:
     return []
 
 
+def parse_change_details(task: dict[str, Any]) -> dict[str, Any] | None:
+    """Return structured change_details dict, or None if missing/invalid."""
+    raw = task.get("change_details")
+    if not raw:
+        return None
+    if isinstance(raw, dict):
+        data = raw
+    else:
+        try:
+            data = json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            return None
+    if not isinstance(data, dict):
+        return None
+    files = data.get("files")
+    if not isinstance(files, list):
+        return None
+    stats = data.get("stats") if isinstance(data.get("stats"), dict) else {}
+    return {
+        "files": files,
+        "stats": {
+            "files": int(stats.get("files") or len(files)),
+            "additions": int(stats.get("additions") or 0),
+            "deletions": int(stats.get("deletions") or 0),
+        },
+        "truncated": bool(data.get("truncated")),
+    }
+
+
 def snapshot(task: dict[str, Any]) -> dict[str, Any]:
     """Structured progress view for APIs and phrasing."""
     stage = task.get("execution_stage") or (
@@ -75,6 +104,7 @@ def snapshot(task: dict[str, Any]) -> dict[str, Any]:
         parsed = parse_completion_report(summary_text)
         if parsed:
             publish_steps = parsed["steps"]
+    change_details = parse_change_details(task)
     return {
         "task_id": task["id"],
         "project": task.get("project"),
@@ -90,6 +120,8 @@ def snapshot(task: dict[str, Any]) -> dict[str, Any]:
         "duration": _duration(task.get("started_at"), task.get("ended_at")),
         "last_activity": _ago(task.get("last_activity_at") or task.get("updated_at")),
         "modified_files": _files(task),
+        "change_stats": (change_details or {}).get("stats"),
+        "has_change_details": bool(change_details),
         "exit_code": task.get("exit_code"),
         "blocker": task.get("blocker"),
         "workspace": task.get("workspace"),
@@ -375,7 +407,8 @@ def reply_estimate(task: dict[str, Any]) -> str:
 def reply_changes(task: dict[str, Any]) -> str:
     files = _files(task)
     summary = (task.get("summary") or "").strip()
-    if not files and not summary:
+    details = parse_change_details(task)
+    if not files and not summary and not details:
         status = task.get("status")
         if status in {"queued", "running"}:
             return (
@@ -385,12 +418,46 @@ def reply_changes(task: dict[str, Any]) -> str:
         return f"I don't have a recorded diff summary for task {task['id']} yet."
 
     lines = [f"Changes on record for {task['project']} (task {task['id']}):", ""]
+    if details and details["stats"]:
+        st = details["stats"]
+        lines.append(
+            f"Diff stats: {st['files']} file(s), +{st['additions']} / -{st['deletions']}"
+            + (" (truncated)" if details.get("truncated") else "")
+        )
+        lines.append("")
     if files:
         lines.append("Files:")
         for path in files[:40]:
             lines.append(f"- {path}")
         if len(files) > 40:
             lines.append(f"- …and {len(files) - 40} more")
+        lines.append("")
+    if details and details["files"]:
+        lines.append("Patch excerpts:")
+        for entry in details["files"][:5]:
+            if not isinstance(entry, dict):
+                continue
+            path = str(entry.get("path") or "")
+            patch = str(entry.get("patch") or "")
+            if not path:
+                continue
+            status = str(entry.get("status") or "M")
+            adds = int(entry.get("additions") or 0)
+            dels = int(entry.get("deletions") or 0)
+            lines.append(f"### {path} ({status} +{adds}/-{dels})")
+            excerpt = "\n".join(patch.splitlines()[:40])
+            if excerpt:
+                lines.append(excerpt)
+            if len(patch.splitlines()) > 40:
+                lines.append("…")
+            lines.append("")
+        if len(details["files"]) > 5:
+            lines.append(f"…and {len(details['files']) - 5} more file(s) in the full review.")
+            lines.append("")
+        lines.append(
+            "Open Review changes in the webchat Activity UI to inspect the full diffs "
+            "before approve & push."
+        )
         lines.append("")
     if summary:
         lines.append("Agent / test summary (scrubbed):")

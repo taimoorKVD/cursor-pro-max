@@ -1418,6 +1418,56 @@ def task_progress(request: Request, task_id: str = "", after: int = 0) -> JSONRe
     return _json({"ok": True, "task": snap, "events": events})
 
 
+@router.get("/chat/tasks/{task_id}/changes")
+def task_changes(request: Request, task_id: str) -> JSONResponse:
+    """Per-file diffs for pre-push review (stored at review time, else live recompute)."""
+    if not _authed(request):
+        return _json({"error": "Unauthorized"}, 401)
+    from pathlib import Path
+
+    from orchestrator import progress, workspace
+    from orchestrator.tasks import get_task
+
+    tid = (task_id or "").strip().lower()
+    task = get_task(tid) if tid else None
+    if not task:
+        return _json({"error": "Not found"}, 404)
+    if task.get("sender") != SENDER:
+        return _json({"error": "Not found"}, 404)
+
+    details = progress.parse_change_details(task)
+    source = "stored"
+    if not details:
+        ws = (task.get("workspace") or "").strip()
+        branch = (task.get("branch") or "").strip()
+        if ws and Path(ws).is_dir() and branch:
+            try:
+                details = workspace.detailed_changes(ws, branch)
+                source = "live"
+            except Exception as exc:  # noqa: BLE001
+                return _json({"ok": False, "error": f"Could not compute diffs: {exc}"}, 500)
+        else:
+            details = {
+                "files": [],
+                "stats": {"files": 0, "additions": 0, "deletions": 0},
+                "truncated": False,
+            }
+            source = "empty"
+
+    return _json(
+        {
+            "ok": True,
+            "task_id": task["id"],
+            "status": task.get("status"),
+            "project": task.get("project"),
+            "files": details["files"],
+            "stats": details["stats"],
+            "truncated": bool(details.get("truncated")),
+            "source": source,
+        }
+    )
+
+
 ICON_SVG = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img">
   <rect width="512" height="512" rx="112" fill="#0b6e4f"/>
   <g fill="none" stroke="#fff" stroke-width="28" stroke-linecap="round" stroke-linejoin="round">

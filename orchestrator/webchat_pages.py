@@ -532,7 +532,9 @@ CHAT_HTML = _CHAT_HEAD + r"""
       <div id="progressRail" class="work-rail mt-2.5" aria-hidden="true"></div>
       <div id="activityReviewActions" class="activity-review-actions" hidden>
         <p class="activity-review-hint">Coding finished — your project folder is unchanged until you approve.</p>
+        <p id="activityChangeSummary" class="activity-change-summary" hidden></p>
         <div class="activity-review-btns">
+          <button type="button" id="activityReviewChangesBtn" class="activity-review-reject">Review changes</button>
           <button type="button" id="activityApproveBtn" class="activity-review-approve">Approve &amp; apply</button>
           <button type="button" id="activityRejectBtn" class="activity-review-reject">Reject</button>
         </div>
@@ -579,10 +581,31 @@ CHAT_HTML = _CHAT_HEAD + r"""
     <span id="reviewBannerHint">Not stuck — coding finished. Apply to update your project, or reject.</span>
   </div>
   <div class="review-banner-btns">
+    <button type="button" id="bannerReviewChangesBtn" class="activity-review-reject">Review changes</button>
     <button type="button" id="bannerApproveBtn" class="activity-review-approve">Approve &amp; apply</button>
     <button type="button" id="bannerCommitApplyBtn" class="activity-review-approve" hidden>Commit local &amp; apply</button>
     <button type="button" id="bannerPushBtn" class="activity-review-reject">Approve &amp; push</button>
     <button type="button" id="bannerRejectBtn" class="activity-review-reject">Reject</button>
+  </div>
+</div>
+<div id="reviewChangesBackdrop" class="review-changes-backdrop" hidden aria-hidden="true"></div>
+<div id="reviewChangesPanel" class="review-changes-panel" hidden role="dialog" aria-modal="true" aria-labelledby="reviewChangesTitle">
+  <div class="review-changes-head">
+    <div class="review-changes-head-copy">
+      <strong id="reviewChangesTitle">Review changes</strong>
+      <span id="reviewChangesMeta" class="review-changes-meta"></span>
+    </div>
+    <button type="button" id="reviewChangesClose" class="review-changes-close" aria-label="Close review">
+      <svg class="size-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6 6 18"/></svg>
+    </button>
+  </div>
+  <div class="review-changes-body">
+    <aside class="review-changes-files" aria-label="Changed files">
+      <div id="reviewChangesFileList" class="review-changes-file-list"></div>
+    </aside>
+    <section class="review-changes-diff" aria-label="Diff">
+      <pre id="reviewChangesDiff" class="review-changes-diff-pre"></pre>
+    </section>
   </div>
 </div>
 <div id="quick" class="no-scrollbar flex shrink-0 gap-1.5 overflow-x-auto px-[max(12px,env(safe-area-inset-right,0px))] py-1.5 pl-[max(12px,env(safe-area-inset-left,0px))] [-webkit-overflow-scrolling:touch] min-[900px]:px-8">
@@ -1936,6 +1959,8 @@ const activityCancelActions = document.getElementById('activityCancelActions');
 const activityApproveBtn = document.getElementById('activityApproveBtn');
 const activityRejectBtn = document.getElementById('activityRejectBtn');
 const activityCancelBtn = document.getElementById('activityCancelBtn');
+const activityReviewChangesBtn = document.getElementById('activityReviewChangesBtn');
+const activityChangeSummary = document.getElementById('activityChangeSummary');
 const reviewBanner = document.getElementById('reviewBanner');
 const reviewBannerTitle = document.getElementById('reviewBannerTitle');
 const reviewBannerHint = document.getElementById('reviewBannerHint');
@@ -1943,6 +1968,16 @@ const bannerApproveBtn = document.getElementById('bannerApproveBtn');
 const bannerCommitApplyBtn = document.getElementById('bannerCommitApplyBtn');
 const bannerPushBtn = document.getElementById('bannerPushBtn');
 const bannerRejectBtn = document.getElementById('bannerRejectBtn');
+const bannerReviewChangesBtn = document.getElementById('bannerReviewChangesBtn');
+const reviewChangesBackdrop = document.getElementById('reviewChangesBackdrop');
+const reviewChangesPanel = document.getElementById('reviewChangesPanel');
+const reviewChangesClose = document.getElementById('reviewChangesClose');
+const reviewChangesMeta = document.getElementById('reviewChangesMeta');
+const reviewChangesFileList = document.getElementById('reviewChangesFileList');
+const reviewChangesDiff = document.getElementById('reviewChangesDiff');
+let _reviewChangesCache = null;
+let _reviewChangesTaskId = '';
+let _reviewChangesSelected = '';
 const progressToggle = document.getElementById('progressToggle');
 const progressMeta = document.getElementById('progressMeta');
 const progressStageLabel = document.getElementById('progressStageLabel');
@@ -2048,6 +2083,157 @@ wireApproveReject(bannerApproveBtn, 'approve and apply', 'Approved');
 wireApproveReject(bannerCommitApplyBtn, 'commit local and apply', 'Approved');
 wireApproveReject(bannerPushBtn, 'approve and push', 'Approved');
 wireApproveReject(bannerRejectBtn, 'reject that', 'Rejected');
+function closeReviewChanges() {
+  if (reviewChangesPanel) reviewChangesPanel.hidden = true;
+  if (reviewChangesBackdrop) {
+    reviewChangesBackdrop.hidden = true;
+    reviewChangesBackdrop.setAttribute('aria-hidden', 'true');
+  }
+}
+function renderDiffHtml(patch) {
+  const lines = String(patch || '').split('\n');
+  return lines.map((ln) => {
+    const esc = escapeHtml(ln);
+    if (ln.startsWith('+++') || ln.startsWith('---') || ln.startsWith('@@') || ln.startsWith('diff ')) {
+      return '<span class="diff-meta">' + esc + '</span>';
+    }
+    if (ln.startsWith('+')) return '<span class="diff-add">' + esc + '</span>';
+    if (ln.startsWith('-')) return '<span class="diff-del">' + esc + '</span>';
+    return esc;
+  }).join('\n');
+}
+function selectReviewFile(path) {
+  _reviewChangesSelected = path || '';
+  if (!reviewChangesFileList || !_reviewChangesCache) return;
+  const files = _reviewChangesCache.files || [];
+  reviewChangesFileList.querySelectorAll('.review-changes-file').forEach((btn) => {
+    btn.classList.toggle('active', btn.dataset.path === _reviewChangesSelected);
+  });
+  const entry = files.find((f) => f && f.path === _reviewChangesSelected) || files[0];
+  if (reviewChangesDiff) {
+    if (!entry) {
+      reviewChangesDiff.innerHTML = '<div class="review-changes-empty">No file selected.</div>';
+      return;
+    }
+    const patch = entry.patch || '(no patch content for this file)';
+    reviewChangesDiff.innerHTML = renderDiffHtml(patch);
+  }
+}
+function renderReviewChangesPanel(data) {
+  _reviewChangesCache = data || null;
+  const files = (data && data.files) || [];
+  const stats = (data && data.stats) || {};
+  if (reviewChangesMeta) {
+    const n = stats.files != null ? stats.files : files.length;
+    const add = stats.additions != null ? stats.additions : 0;
+    const del = stats.deletions != null ? stats.deletions : 0;
+    let meta = n + ' file' + (n === 1 ? '' : 's') + ' · +' + add + ' / −' + del;
+    if (data && data.truncated) meta += ' · truncated';
+    if (data && data.project) meta = data.project + ' · ' + meta;
+    reviewChangesMeta.textContent = meta;
+  }
+  if (!reviewChangesFileList) return;
+  reviewChangesFileList.innerHTML = '';
+  if (!files.length) {
+    const empty = document.createElement('div');
+    empty.className = 'review-changes-empty';
+    empty.textContent = 'No file changes recorded for this task.';
+    reviewChangesFileList.appendChild(empty);
+    if (reviewChangesDiff) {
+      reviewChangesDiff.innerHTML = '<div class="review-changes-empty">Nothing to diff yet.</div>';
+    }
+    return;
+  }
+  files.forEach((f) => {
+    if (!f || !f.path) return;
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'review-changes-file';
+    btn.dataset.path = f.path;
+    const st = document.createElement('span');
+    st.className = 'review-changes-file-status';
+    st.textContent = f.status || 'M';
+    const path = document.createElement('span');
+    path.className = 'review-changes-file-path';
+    path.textContent = f.path;
+    path.title = f.path;
+    const counts = document.createElement('span');
+    counts.className = 'review-changes-file-stats';
+    counts.innerHTML = '<span class="add">+' + (f.additions || 0) + '</span> <span class="del">−' + (f.deletions || 0) + '</span>';
+    btn.appendChild(st);
+    btn.appendChild(path);
+    btn.appendChild(counts);
+    btn.addEventListener('click', () => selectReviewFile(f.path));
+    reviewChangesFileList.appendChild(btn);
+  });
+  selectReviewFile(files[0].path);
+}
+async function openReviewChanges(taskId) {
+  const tid = (taskId || _selectedTaskId || '').trim();
+  if (!tid) return;
+  if (reviewChangesBackdrop) {
+    reviewChangesBackdrop.hidden = false;
+    reviewChangesBackdrop.setAttribute('aria-hidden', 'false');
+  }
+  if (reviewChangesPanel) reviewChangesPanel.hidden = false;
+  if (reviewChangesMeta) reviewChangesMeta.textContent = 'Loading diffs…';
+  if (reviewChangesFileList) reviewChangesFileList.innerHTML = '';
+  if (reviewChangesDiff) {
+    reviewChangesDiff.innerHTML = '<div class="review-changes-empty">Loading…</div>';
+  }
+  try {
+    const r = await fetch('/chat/tasks/' + encodeURIComponent(tid) + '/changes', {cache: 'no-store'});
+    const data = await r.json();
+    if (!r.ok || !data.ok) {
+      throw new Error((data && data.error) || ('HTTP ' + r.status));
+    }
+    _reviewChangesTaskId = tid;
+    renderReviewChangesPanel(data);
+  } catch (e) {
+    if (reviewChangesMeta) reviewChangesMeta.textContent = 'Could not load changes';
+    if (reviewChangesDiff) {
+      reviewChangesDiff.innerHTML = '<div class="review-changes-empty">' + escapeHtml(String(e.message || e)) + '</div>';
+    }
+  }
+}
+function updateActivityChangeSummary(task) {
+  if (!activityChangeSummary) return;
+  const files = (task && task.modified_files) || [];
+  const stats = (task && task.change_stats) || null;
+  const n = (stats && stats.files != null) ? stats.files : files.length;
+  if (!n && !(task && task.has_change_details)) {
+    activityChangeSummary.hidden = true;
+    activityChangeSummary.textContent = '';
+    return;
+  }
+  const add = stats && stats.additions != null ? stats.additions : null;
+  const del = stats && stats.deletions != null ? stats.deletions : null;
+  let label = n + ' file' + (n === 1 ? '' : 's') + ' changed';
+  if (add != null && del != null) label += ' · +' + add + ' / −' + del;
+  activityChangeSummary.hidden = false;
+  activityChangeSummary.innerHTML = escapeHtml(label) + ' · <button type="button" data-review-link="1">Review</button>';
+  const link = activityChangeSummary.querySelector('[data-review-link]');
+  if (link) {
+    link.addEventListener('click', () => openReviewChanges(task.task_id || _selectedTaskId));
+  }
+}
+if (activityReviewChangesBtn) {
+  activityReviewChangesBtn.addEventListener('click', () => openReviewChanges(_selectedTaskId));
+}
+if (bannerReviewChangesBtn) {
+  bannerReviewChangesBtn.addEventListener('click', () => openReviewChanges(_selectedTaskId));
+}
+if (reviewChangesClose) {
+  reviewChangesClose.addEventListener('click', () => closeReviewChanges());
+}
+if (reviewChangesBackdrop) {
+  reviewChangesBackdrop.addEventListener('click', () => closeReviewChanges());
+}
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && reviewChangesPanel && !reviewChangesPanel.hidden) {
+    closeReviewChanges();
+  }
+});
 function formatElapsed(sec) {
   sec = Math.max(0, Math.floor(sec || 0));
   if (sec < 60) return sec + 's';
@@ -2456,6 +2642,11 @@ async function refreshProgress() {
     }
     if (activityReviewActions) activityReviewActions.hidden = !needsReview;
     if (activityCancelActions) activityCancelActions.hidden = !active;
+    if (needsReview) updateActivityChangeSummary(t);
+    else if (activityChangeSummary) {
+      activityChangeSummary.hidden = true;
+      activityChangeSummary.textContent = '';
+    }
     setBusyCancelVisible(active);
     setElapsedClock(t.started_at, active);
     if (headSig !== _lastProgressSig) {
