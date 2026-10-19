@@ -19,7 +19,6 @@ from orchestrator import (
     tasks,
 )
 from orchestrator.notify import send_text
-from orchestrator.process import cancel_tracked
 
 
 def _help() -> str:
@@ -36,6 +35,8 @@ def _help() -> str:
         '- "Commit local and apply" to commit WIP then merge the review branch\n'
         '- "Continue working" to resume the same Cursor session when possible\n'
         '- "Reject that" to discard a review\n'
+        '- "Cancel that task" to stop in-progress work\n'
+        '- "Remove project velora" to unregister a chat and cancel its work\n'
         '- "Set projects root C:/laragon/www" then "Scan projects" / "Add project velora"\n'
         '- "Create project my-app" or "Create project my-app: scaffold a todo API"\n'
         '- "Update project lifeos set allow_push true"\n'
@@ -720,11 +721,28 @@ def _handle_inner(sender: str, body: str) -> None:
             converse.set_pending(sender, kind="confirm_remove_project", project=resolved)
             send_text(
                 sender,
-                f'Remove "{resolved}" from the registry? Reply yes to confirm, or cancel.',
+                f'Remove "{resolved}" from the system? This cancels in-progress work and '
+                "clears that project's chat. The folder on disk stays. "
+                "Reply yes to confirm, or cancel.",
                 level="info",
             )
             return
+        cleanup: dict = {}
         try:
+            from orchestrator import history, retention
+            from orchestrator.converse import clear_conversation_state
+            from orchestrator.webchat import clear_messages
+
+            cleanup = retention.cleanup_sender_workspaces(
+                sender, project=resolved, reason="project removed"
+            )
+            clear_messages(project=resolved)
+            session.set_active_task(sender, None, project=resolved)
+            clear_conversation_state(sender)
+            try:
+                history.clear_sender(sender, project=resolved)
+            except Exception:  # noqa: BLE001
+                pass
             removed = projects.remove_project(resolved)
         except projects.ProjectConfigError as exc:
             converse.clear_pending(sender)
@@ -734,12 +752,18 @@ def _handle_inner(sender: str, body: str) -> None:
         ctx = session.get(sender)
         if (ctx.get("active_project") or "") == resolved:
             session.switch_project(sender, None)
-        send_text(
-            sender,
-            f'Removed "{removed["id"]}" from the registry. The folder on disk is unchanged.',
-            level="info",
+        bits = [f'Removed "{removed["id"]}" from the system.']
+        if cleanup.get("canceled"):
+            bits.append(f'{cleanup["canceled"]} task(s) cancelled.')
+        if cleanup.get("deleted"):
+            bits.append(f'{cleanup["deleted"]} task(s) deleted.')
+        bits.append("The folder on disk is unchanged.")
+        send_text(sender, " ".join(bits), level="info")
+        audit.record(
+            "project_removed",
+            actor=sender,
+            detail={"project": resolved, **cleanup},
         )
-        audit.record("project_removed", actor=sender, detail={"project": resolved})
         return
 
     if intent.kind == "tasks":
@@ -1242,27 +1266,8 @@ def _handle_inner(sender: str, body: str) -> None:
                 'If it\'s waiting for review, say "reject that" instead.',
             )
             return
-        killed = cancel_tracked(task["id"])
-        from orchestrator import db as _db
-        from orchestrator import queue as _queue
-
-        _queue.fail_running_for_task(task["id"], "Cancelled by user")
-        tasks.update_task(
-            task["id"],
-            status="failed",
-            execution_stage="canceled",
-            summary="Cancelled by user",
-            blocker="Cancelled by user",
-            ended_at=_db.now(),
-            agent_pid=None,
-        )
-        task_events.record(
-            task["id"],
-            "canceled",
-            "Cancelled by user" + (" (agent process signaled)" if killed else ""),
-            stage="canceled",
-            detail={"process_signaled": killed},
-        )
+        result = tasks.cancel_in_progress(task["id"], reason="Cancelled by user")
+        killed = bool(result.get("process_signaled"))
         audit.record("task_cancelled", actor=sender, task_id=task["id"])
         send_text(
             sender,

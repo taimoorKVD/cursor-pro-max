@@ -483,6 +483,9 @@ CHAT_HTML = _CHAT_HEAD + r"""
         <button type="button" id="renameChatBtn" class="hdr-icon-btn !size-7 shrink-0 hidden" title="Rename chat" aria-label="Rename chat">
           <svg class="size-3.5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
         </button>
+        <button type="button" id="removeChatBtn" class="hdr-icon-btn !size-7 shrink-0 hidden" title="Remove project chat from system" aria-label="Remove project chat">
+          <svg class="size-3.5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 7h16M9 7V5h6v2M8 7l1 12h6l1-12"/></svg>
+        </button>
       </div>
       <span id="pill" class="group mt-0.5 flex min-w-0 items-center gap-1.5 text-[10.5px] text-muted"><span class="size-[7px] shrink-0 rounded-full bg-[#9aa8a1] group-[.live]:animate-dot group-[.live]:bg-ok group-[.off]:bg-bad"></span><span id="pillText" class="truncate">Connecting...</span></span>
     </div>
@@ -534,6 +537,12 @@ CHAT_HTML = _CHAT_HEAD + r"""
           <button type="button" id="activityRejectBtn" class="activity-review-reject">Reject</button>
         </div>
       </div>
+      <div id="activityCancelActions" class="activity-review-actions" hidden>
+        <p class="activity-review-hint">Stop the in-progress agent for this task. Workspace files stay until you clear activity.</p>
+        <div class="activity-review-btns">
+          <button type="button" id="activityCancelBtn" class="activity-review-reject">Cancel task</button>
+        </div>
+      </div>
     </section>
     <section class="flex min-h-0 flex-1 flex-col gap-1.5">
       <div class="work-feed-head">
@@ -561,6 +570,7 @@ CHAT_HTML = _CHAT_HEAD + r"""
 <div id="busy" class="work-busy">
   <span class="work-busy-spinner" aria-hidden="true"></span>
   <span id="busyText" class="work-busy-text">Working on your request...</span>
+  <button type="button" id="busyCancelTask" class="work-busy-link work-busy-cancel" hidden>Cancel</button>
   <button type="button" id="busyOpenProgress" class="work-busy-link">View activity</button>
 </div>
 <div id="reviewBanner" class="review-banner" hidden>
@@ -780,6 +790,7 @@ let inflightProjects = new Set();
 let renameChatTarget = '';
 const chatTitle = document.getElementById('chatTitle');
 const renameChatBtn = document.getElementById('renameChatBtn');
+const removeChatBtn = document.getElementById('removeChatBtn');
 const renameChatModal = document.getElementById('renameChatModal');
 const renameChatInput = document.getElementById('renameChatInput');
 const renameChatHint = document.getElementById('renameChatHint');
@@ -1085,6 +1096,10 @@ function updateChatTitle() {
   if (renameChatBtn) {
     renameChatBtn.classList.toggle('hidden', !activeProject);
     renameChatBtn.disabled = !activeProject;
+  }
+  if (removeChatBtn) {
+    removeChatBtn.classList.toggle('hidden', !activeProject);
+    removeChatBtn.disabled = !activeProject;
   }
   document.title = activeProject
     ? (projectDisplayName(activeProject) + ' · Orchestrator')
@@ -1537,19 +1552,34 @@ async function saveRenameChat() {
 }
 
 async function removeRegisteredProject(id) {
-  if (!window.confirm('Remove "' + id + '" from the registry? The folder on disk stays.')) return;
+  const label = projectDisplayName(id) || id;
+  const ok = await askConfirm(
+    'This removes "' + label + '" from the system: cancels in-progress tasks, clears that chat, and unregisters the project. The folder on disk stays. You can’t undo it.',
+    {
+      title: 'Remove project chat?',
+      okLabel: 'Remove from system',
+      danger: true,
+    }
+  );
+  if (!ok) return;
   try {
     const wasActive = activeProject === id;
     const r = await fetch('/chat/projects/' + encodeURIComponent(id), {method: 'DELETE'});
     if (r.status === 401) { location.reload(); return; }
-    const j = await r.json();
+    const j = await r.json().catch(() => ({}));
     if (!r.ok) {
       showToast(j.error || 'Remove failed');
       return;
     }
-    showToast('Removed ' + id);
-    // Stay on All Projects (do not jump to another registered project).
+    let detail = 'Removed ' + label;
+    if (j && (j.canceled || j.deleted)) {
+      detail += (j.canceled ? (' · ' + j.canceled + ' cancelled') : '')
+        + (j.deleted ? (', ' + j.deleted + ' task(s) deleted') : '');
+    }
+    showToast(detail);
     if (wasActive) {
+      resetLog();
+      resetProgressPanel();
       await selectProject('');
     } else {
       await refreshStatus();
@@ -1902,8 +1932,10 @@ const activityDrawerBackdrop = document.getElementById('activityDrawerBackdrop')
 const activityDrawerClose = document.getElementById('activityDrawerClose');
 const activityHistory = document.getElementById('activityHistory');
 const activityReviewActions = document.getElementById('activityReviewActions');
+const activityCancelActions = document.getElementById('activityCancelActions');
 const activityApproveBtn = document.getElementById('activityApproveBtn');
 const activityRejectBtn = document.getElementById('activityRejectBtn');
+const activityCancelBtn = document.getElementById('activityCancelBtn');
 const reviewBanner = document.getElementById('reviewBanner');
 const reviewBannerTitle = document.getElementById('reviewBannerTitle');
 const reviewBannerHint = document.getElementById('reviewBannerHint');
@@ -1920,6 +1952,7 @@ const progressRail = document.getElementById('progressRail');
 const progressElapsed = document.getElementById('progressElapsed');
 const progressLiveBadge = document.getElementById('progressLiveBadge');
 const busyOpenProgress = document.getElementById('busyOpenProgress');
+const busyCancelTask = document.getElementById('busyCancelTask');
 const PIPELINE_STEPS = [
   {key: 'queued', short: 'Queued'},
   {key: 'preparing_workspace', short: 'Workspace'},
@@ -1993,6 +2026,12 @@ if (activityDrawerBackdrop) {
 }
 if (busyOpenProgress) {
   busyOpenProgress.addEventListener('click', () => openProgressPanel());
+}
+if (busyCancelTask) {
+  busyCancelTask.addEventListener('click', () => cancelInProgressTask(_selectedTaskId || ''));
+}
+if (activityCancelBtn) {
+  activityCancelBtn.addEventListener('click', () => cancelInProgressTask(_selectedTaskId || ''));
 }
 function wireApproveReject(btn, phrase, resolvedLabel) {
   if (!btn) return;
@@ -2138,6 +2177,8 @@ function setIdleCurrentActivity() {
   }
   if (progressLiveBadge) progressLiveBadge.hidden = true;
   if (activityReviewActions) activityReviewActions.hidden = true;
+  if (activityCancelActions) activityCancelActions.hidden = true;
+  setBusyCancelVisible(false);
   setReviewBanner(false);
   setElapsedClock(0, false);
 }
@@ -2203,6 +2244,53 @@ async function retryPublishFailedTask(taskId, action) {
     sending = false;
   }
 }
+async function cancelInProgressTask(taskId) {
+  if (sending) return;
+  const ok = await askConfirm(
+    'This stops the in-progress agent for this task. Workspace files stay until you clear activity or remove the chat.',
+    {
+      title: 'Cancel in-progress task?',
+      okLabel: 'Cancel task',
+      danger: true,
+    }
+  );
+  if (!ok) return;
+  sending = true;
+  if (busyCancelTask) busyCancelTask.disabled = true;
+  if (activityCancelBtn) activityCancelBtn.disabled = true;
+  try {
+    const body = {};
+    if (taskId) body.task_id = taskId;
+    const r = await fetch('/chat/cancel-task', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (r.status === 401) { location.reload(); return; }
+    if (!r.ok) {
+      showToast(j.error || ('Cancel failed: ' + r.status));
+      return;
+    }
+    if (j.task_id) _selectedTaskId = j.task_id;
+    _renderedEventIds = new Set();
+    _lastProgressSig = '';
+    _lastHistorySig = '';
+    showToast('Task cancelled' + (j.process_signaled ? ' · agent signaled' : ''));
+    await refreshStatus();
+    await refreshProgress();
+  } catch (e) {
+    showToast('Cancel failed');
+  } finally {
+    sending = false;
+    if (busyCancelTask) busyCancelTask.disabled = false;
+    if (activityCancelBtn) activityCancelBtn.disabled = false;
+  }
+}
+function setBusyCancelVisible(show) {
+  if (!busyCancelTask) return;
+  busyCancelTask.hidden = !show;
+}
 function renderActivityHistory(tasks, activeId) {
   if (!activityHistory) return;
   const rows = (tasks || []).filter(t => !isClearedActivityTask(t));
@@ -2244,6 +2332,19 @@ function renderActivityHistory(tasks, activeId) {
       refreshProgress();
     });
     row.appendChild(select);
+    if (live) {
+      const cancelBtn = document.createElement('button');
+      cancelBtn.type = 'button';
+      cancelBtn.className = 'activity-history-cancel';
+      cancelBtn.textContent = 'Cancel';
+      cancelBtn.title = 'Cancel this in-progress task';
+      cancelBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        cancelInProgressTask(t.id);
+      });
+      row.appendChild(cancelBtn);
+    }
     if (canRetry) {
       const tryBtn = document.createElement('button');
       tryBtn.type = 'button';
@@ -2313,6 +2414,8 @@ async function refreshProgress() {
     renderActivityHistory(_recentTasksCache, t ? t.task_id : _selectedTaskId);
     if (!t) {
       if (activityReviewActions) activityReviewActions.hidden = true;
+      if (activityCancelActions) activityCancelActions.hidden = true;
+      setBusyCancelVisible(false);
       if (progressPanel) progressPanel.classList.remove('needs-review');
       if (!_selectedTaskId) {
         setIdleCurrentActivity();
@@ -2352,6 +2455,8 @@ async function refreshProgress() {
       else if (active) progressLiveBadge.innerHTML = '<span class="work-live-dot" aria-hidden="true"></span>Live';
     }
     if (activityReviewActions) activityReviewActions.hidden = !needsReview;
+    if (activityCancelActions) activityCancelActions.hidden = !active;
+    setBusyCancelVisible(active);
     setElapsedClock(t.started_at, active);
     if (headSig !== _lastProgressSig) {
       _lastProgressSig = headSig;
@@ -2613,6 +2718,7 @@ async function refreshStatus() {
     const projectActive = liveScoped.length > 0;
     const otherWorking = [...inflightProjects].some(p => p !== activeProject);
     busy.classList.toggle('on', projectActive || sending);
+    setBusyCancelVisible(projectActive);
     if (progressToggle) progressToggle.classList.toggle('working', projectActive || otherWorking);
     const stage = (j.active_task && j.active_task.execution_stage) || '';
     const stageNice = stage ? stage.replace(/_/g, ' ') : '';
@@ -2990,6 +3096,11 @@ if (folderPickerModal) {
 }
 if (renameChatBtn) {
   renameChatBtn.addEventListener('click', () => openRenameChat(activeProject));
+}
+if (removeChatBtn) {
+  removeChatBtn.addEventListener('click', () => {
+    if (activeProject) removeRegisteredProject(activeProject);
+  });
 }
 if (chatTitle) {
   chatTitle.addEventListener('click', () => {

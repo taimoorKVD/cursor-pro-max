@@ -1227,7 +1227,8 @@ html[data-theme="dark"] {
     font-size: 10.5px;
     font-variant-numeric: tabular-nums;
   }
-  .activity-history-try {
+  .activity-history-try,
+  .activity-history-cancel {
     flex-shrink: 0;
     border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--line));
     border-radius: 999px;
@@ -1245,8 +1246,24 @@ html[data-theme="dark"] {
     background: color-mix(in srgb, var(--accent-soft) 60%, white);
     border-color: var(--accent);
   }
-  .activity-history-try:active {
+  .activity-history-try:active,
+  .activity-history-cancel:active {
     transform: translateY(1px);
+  }
+  .activity-history-cancel {
+    border-color: color-mix(in srgb, #b42318 28%, var(--line));
+    background: #fff5f4;
+    color: #b42318;
+  }
+  .activity-history-cancel:hover {
+    border-color: #f0c4bf;
+    background: #ffeceb;
+  }
+  .work-busy-cancel {
+    color: #b42318;
+  }
+  .work-busy-cancel:hover {
+    color: #912018;
   }
   .chat-title-editable {
     cursor: pointer;

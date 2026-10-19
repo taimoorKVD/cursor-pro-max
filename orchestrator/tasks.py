@@ -307,3 +307,62 @@ def inflight_projects_for_sender(sender: str) -> list[str]:
         if name and name not in seen:
             seen.append(name)
     return seen
+
+
+_CANCELABLE = frozenset({"queued", "running", "publishing"})
+
+
+def cancel_in_progress(
+    task_id: str,
+    *,
+    reason: str = "Cancelled by user",
+) -> dict[str, Any]:
+    """Signal stop and mark a queued/running/publishing task cancelled.
+
+    Returns ``{ok, task, process_signaled, error?}``. Does not send chat replies.
+    """
+    from orchestrator import task_events
+    from orchestrator.process import cancel_tracked
+
+    reason_label = (reason or "Cancelled by user").strip() or "Cancelled by user"
+    task = get_task(task_id)
+    if not task:
+        return {"ok": False, "task": None, "process_signaled": False, "error": "not_found"}
+    status = task.get("status") or ""
+    if status not in _CANCELABLE:
+        return {
+            "ok": False,
+            "task": task,
+            "process_signaled": False,
+            "error": f"status_{status}",
+        }
+    killed = cancel_tracked(task["id"])
+    try:
+        from orchestrator import queue
+
+        queue.fail_running_for_task(task["id"], reason_label)
+    except Exception:  # noqa: BLE001
+        pass
+    update_task(
+        task["id"],
+        status="failed",
+        execution_stage="canceled",
+        summary=reason_label,
+        blocker=reason_label,
+        ended_at=db.now(),
+        agent_pid=None,
+    )
+    task_events.record(
+        task["id"],
+        "canceled",
+        reason_label + (" (agent process signaled)" if killed else ""),
+        stage="canceled",
+        detail={"process_signaled": killed},
+    )
+    updated = get_task(task["id"]) or task
+    return {
+        "ok": True,
+        "task": updated,
+        "process_signaled": bool(killed),
+        "error": None,
+    }

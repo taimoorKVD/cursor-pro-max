@@ -1062,13 +1062,39 @@ async def update_project_api(request: Request, project_id: str) -> JSONResponse:
     return _json({"ok": True, "project": updated})
 
 
+def _purge_project_chat(project_id: str, *, reason: str = "project removed") -> dict:
+    """Cancel in-progress work and wipe chat/tasks/workspaces for one project."""
+    from orchestrator import history, retention, session
+    from orchestrator.converse import clear_conversation_state
+
+    cleanup = retention.cleanup_sender_workspaces(
+        SENDER, project=project_id, reason=reason
+    )
+    clear_messages(project=project_id)
+    session.set_active_task(SENDER, None, project=project_id)
+    clear_conversation_state(SENDER)
+    try:
+        history.clear_sender(SENDER, project=project_id)
+    except Exception:  # noqa: BLE001
+        pass
+    return cleanup
+
+
 @router.delete("/chat/projects/{project_id}")
 def delete_project_api(request: Request, project_id: str) -> JSONResponse:
+    """Unregister a project and remove its chat/tasks from the system."""
     if not _authed(request):
         return _json({"error": "Unauthorized"}, 401)
     from orchestrator import session
-    from orchestrator.projects import ProjectConfigError, remove_project
+    from orchestrator.projects import ProjectConfigError, load_projects, remove_project
 
+    project_id = (project_id or "").strip()
+    if not project_id:
+        return _json({"error": "project_id required"}, 400)
+    registry = load_projects(strict=False)
+    if project_id not in registry:
+        return _json({"error": f"Unknown project: {project_id}"}, 404)
+    cleanup = _purge_project_chat(project_id, reason="project removed")
     try:
         removed = remove_project(project_id)
     except ProjectConfigError as exc:
@@ -1076,8 +1102,68 @@ def delete_project_api(request: Request, project_id: str) -> JSONResponse:
     ctx = session.get(SENDER)
     if (ctx.get("active_project") or "") == project_id:
         session.switch_project(SENDER, None)
-    audit.record("project_removed", actor=SENDER, detail={"project": project_id})
-    return _json({"ok": True, "project": removed})
+    audit.record(
+        "project_removed",
+        actor=SENDER,
+        detail={"project": project_id, **cleanup},
+    )
+    return _json({"ok": True, "project": removed, **cleanup})
+
+
+@router.post("/chat/cancel-task")
+async def cancel_task_api(request: Request) -> JSONResponse:
+    """Cancel a queued/running/publishing task from Activity / busy bar."""
+    if not _authed(request):
+        return _json({"error": "Unauthorized"}, 401)
+    data = await _read_json(request)
+    if data is None:
+        return _json({"error": "Bad request"}, 400)
+    task_id = str(data.get("task_id") or "").strip().lower()
+    from orchestrator import session
+    from orchestrator.tasks import active_task_for_sender, cancel_in_progress, get_task
+
+    if not task_id:
+        project = _current_project()
+        active = active_task_for_sender(SENDER, project=project or None)
+        if not active or active.get("status") not in {"queued", "running", "publishing"}:
+            return _json({"error": "No in-progress task to cancel"}, 404)
+        task_id = active["id"]
+    task = get_task(task_id)
+    if not task or task.get("sender") != SENDER:
+        return _json({"error": "Task not found"}, 404)
+    result = cancel_in_progress(task_id, reason="Cancelled by user")
+    if not result.get("ok"):
+        status = (result.get("task") or task).get("status") or "unknown"
+        return _json(
+            {
+                "error": (
+                    f"Task is {status}, so it can't be cancelled. "
+                    'If it\'s waiting for review, reject it instead.'
+                ),
+                "status": status,
+            },
+            409,
+        )
+    updated = result["task"]
+    session.set_active_task(
+        SENDER, updated["id"], project=str(updated.get("project") or "") or None
+    )
+    audit.record(
+        "task_cancelled",
+        actor=SENDER,
+        task_id=updated["id"],
+        detail={"process_signaled": result.get("process_signaled")},
+    )
+    return _json(
+        {
+            "ok": True,
+            "task_id": updated["id"],
+            "project": updated.get("project"),
+            "status": updated.get("status"),
+            "execution_stage": updated.get("execution_stage"),
+            "process_signaled": bool(result.get("process_signaled")),
+        }
+    )
 
 
 _CHAT_CSS = Path(__file__).resolve().parent / "static" / "app.css"

@@ -472,6 +472,7 @@ def test_projects_api_scan_register_patch_delete(tmp_path, monkeypatch):
 
     deleted = client.delete("/chat/projects/demoapp")
     assert deleted.status_code == 200
+    assert deleted.json().get("ok") is True
     assert client.get("/chat/projects").json()["projects"] == []
 
     # Create from scratch: mkdir under root + register
@@ -483,6 +484,96 @@ def test_projects_api_scan_register_patch_delete(tmp_path, monkeypatch):
     assert (root / "brand-new").is_dir()
     listed_after = client.get("/chat/projects").json()["projects"]
     assert any(p["id"] == "brand-new" for p in listed_after)
+
+
+def test_delete_project_cancels_inflight_and_clears_chat(tmp_path, monkeypatch):
+    root = tmp_path / "www"
+    root.mkdir()
+    folder = root / "demoapp"
+    folder.mkdir()
+    projects_file = tmp_path / "projects.json"
+    monkeypatch.setenv("PROJECTS_ROOT", str(root))
+    monkeypatch.setenv("PROJECTS_FILE", str(projects_file))
+    monkeypatch.setenv("PROJECTS_ROOT_FILE", str(tmp_path / "projects_root.json"))
+    client = _client(monkeypatch, tmp_path)
+    assert _login(client).status_code == 200
+
+    import orchestrator.config as cfg
+
+    cfg.settings.reload()
+
+    assert client.post("/chat/projects", json={"id": "demoapp", "path": str(folder)}).status_code == 200
+    assert client.post("/chat/active-project", json={"project": "demoapp"}).status_code == 200
+    assert client.post("/chat/send", json={"text": "hello demo", "cid": "rm-msg-1"}).status_code == 200
+
+    from orchestrator import session, tasks
+
+    tasks.create_task("rmprojtask0001", "web:owner", "demoapp", "in flight")
+    tasks.update_task("rmprojtask0001", status="running", execution_stage="agent_running")
+    session.set_active_task("web:owner", "rmprojtask0001", project="demoapp")
+
+    deleted = client.delete("/chat/projects/demoapp")
+    assert deleted.status_code == 200
+    body = deleted.json()
+    assert body.get("ok") is True
+    assert body.get("canceled", 0) >= 1
+    assert body.get("deleted", 0) >= 1
+    assert tasks.get_task("rmprojtask0001") is None
+    assert client.get("/chat/projects").json()["projects"] == []
+    # Folder on disk stays.
+    assert folder.is_dir()
+
+
+def test_cancel_task_api_stops_inflight(tmp_path, monkeypatch):
+    client = _client(monkeypatch, tmp_path)
+    assert _login(client).status_code == 200
+
+    from orchestrator import session, tasks
+
+    tid = "canceltask0001"
+    tasks.create_task(tid, "web:owner", "lifeos", "long running")
+    tasks.update_task(tid, status="running", execution_stage="agent_running")
+    session.set_active_project("web:owner", "lifeos")
+    session.set_active_task("web:owner", tid, project="lifeos")
+
+    missing = client.post("/chat/cancel-task", json={"task_id": "doesnotexist1"})
+    assert missing.status_code == 404
+
+    ok = client.post("/chat/cancel-task", json={"task_id": tid})
+    assert ok.status_code == 200
+    body = ok.json()
+    assert body["ok"] is True
+    assert body["task_id"] == tid
+    assert body["status"] == "failed"
+    assert body["execution_stage"] == "canceled"
+    row = tasks.get_task(tid)
+    assert row["status"] == "failed"
+    assert row["execution_stage"] == "canceled"
+
+    # Review tasks cannot be cancelled via this endpoint.
+    tasks.create_task("cancelreview01", "web:owner", "lifeos", "ready")
+    tasks.update_task("cancelreview01", status="running", execution_stage="agent_running")
+    tasks.update_task("cancelreview01", status="review", execution_stage="ready_for_review")
+    bad = client.post("/chat/cancel-task", json={"task_id": "cancelreview01"})
+    assert bad.status_code == 409
+
+
+def test_chat_page_includes_remove_and_cancel_ui(tmp_path, monkeypatch):
+    client = _client(monkeypatch, tmp_path)
+    _login(client)
+    html = client.get("/chat").text
+    assert 'id="removeChatBtn"' in html
+    assert 'id="activityCancelActions"' in html
+    assert 'id="activityCancelBtn"' in html
+    assert 'id="busyCancelTask"' in html
+    assert "cancelInProgressTask" in html
+    assert "/chat/cancel-task" in html
+    assert "activity-history-cancel" in html
+    assert "Remove from system" in html
+    css = client.get("/chat/app.css")
+    assert css.status_code == 200
+    assert "activity-history-cancel" in css.text
+    assert "work-busy-cancel" in css.text
 
 
 def test_chat_page_includes_manage_projects_ui(tmp_path, monkeypatch):
@@ -548,9 +639,12 @@ def test_activity_format_regexes_use_js_whitespace(tmp_path, monkeypatch):
     assert "clearResolvedReviewCtas" in CHAT_HTML
     assert "openProgressPanel()" in CHAT_HTML
     assert "retryPublishFailedTask" in CHAT_HTML
+    assert "cancelInProgressTask" in CHAT_HTML
     assert "activity-history-try" in CHAT_HTML
+    assert "activity-history-cancel" in CHAT_HTML
     assert "Try Again" in CHAT_HTML
     assert "/chat/retry-task" in CHAT_HTML
+    assert "/chat/cancel-task" in CHAT_HTML
     assert "Publish failed" in CHAT_HTML
 
 
